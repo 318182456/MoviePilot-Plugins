@@ -882,61 +882,176 @@ class LocalSubDownloader(_PluginBase):
 
     def get_moviepilot_media_paths(self) -> List[Path]:
         """
-        自动探测并提取 MoviePilot 中用户在数据库和后台配置的所有媒体库目录与资源整理目录
+        自动探测并提取 MoviePilot 中用户在数据库和后台配置的所有媒体库目录与资源整理目录。
+        采用极高兼容性的动态反射机制，自动适配 V1 和 V2 各种版本中的模型更名与模块路径变更。
         """
         paths = set()
 
-        # 策略 1：查询数据库中的 TransferCategory 模型，提取用户配置的所有分类整理路径
+        # 策略 1：V2 版的 DirectoryHelper (最优先级)
         try:
-            from app.db import get_db
-            from app.db.models.transfer_category import TransferCategory
-            db = next(get_db())
-            categories = db.query(TransferCategory).all()
-            for cat in categories:
-                # 提取媒体库存储目录
-                if getattr(cat, "library_path", None):
-                    paths.add(Path(cat.library_path))
-                # 提取下载资源整理目录
-                if getattr(cat, "download_path", None):
-                    paths.add(Path(cat.download_path))
+            from app.helper.directory import DirectoryHelper
+            dir_confs = DirectoryHelper.get_dirs()
+            if dir_confs:
+                for d in dir_confs:
+                    if getattr(d, "download_path", None):
+                        paths.add(Path(d.download_path))
+                    if getattr(d, "library_path", None):
+                        paths.add(Path(d.library_path))
+                logger.info(f"[LocalSubDownloader] 从 DirectoryHelper 成功提取 {len(paths)} 个目录配置")
         except Exception as e:
-            logger.error(f"[LocalSubDownloader] 通过ORM数据库提取分类目录失败: {e}")
+            logger.debug(f"[LocalSubDownloader] 尝试使用 DirectoryHelper 失败(可能非 V2 环境): {e}")
 
-        # 策略 2：通过 MoviePilot 系统内置的 CategoryHelper 获取分类配置
+        # 策略 2：通过 MoviePilot 系统内置的 CategoryHelper 获取分类配置 (V1/V2 早期版)
+        if not paths:
+            try:
+                CategoryHelper = None
+                import_helper_errs = []
+                
+                try:
+                    from app.helper.category import CategoryHelper
+                except Exception as e:
+                    import_helper_errs.append(f"app.helper.category: {e}")
+                    
+                if not CategoryHelper:
+                    try:
+                        from app.helper import CategoryHelper
+                    except Exception as e:
+                        import_helper_errs.append(f"app.helper: {e}")
+
+                if not CategoryHelper:
+                    try:
+                        from app.helper.transfer import CategoryHelper
+                    except Exception as e:
+                        import_helper_errs.append(f"app.helper.transfer: {e}")
+
+                if not CategoryHelper:
+                    try:
+                        import app.helper as helper
+                        for attr_name in dir(helper):
+                            if "Category" in attr_name or "Helper" in attr_name:
+                                attr_value = getattr(helper, attr_name)
+                                if isinstance(attr_value, type):
+                                    CategoryHelper = attr_value
+                                    logger.info(f"[LocalSubDownloader] 动态反射识别到分类助手: {attr_name}")
+                                    break
+                    except Exception as e:
+                        import_helper_errs.append(f"app.helper dir scan: {e}")
+
+                if CategoryHelper:
+                    categories = CategoryHelper().get_categories() or []
+                    for cat in categories:
+                        if isinstance(cat, dict):
+                            dl_path = cat.get("download_path")
+                            lib_path = cat.get("library_path")
+                            if dl_path:
+                                paths.add(Path(dl_path))
+                            if lib_path:
+                                paths.add(Path(lib_path))
+                        elif hasattr(cat, "download_path"):
+                            if getattr(cat, "download_path"):
+                                paths.add(Path(cat.download_path))
+                            if getattr(cat, "library_path"):
+                                paths.add(Path(cat.library_path))
+                else:
+                    logger.debug(f"[LocalSubDownloader] 无法定位到 CategoryHelper 助手类，已试过所有导入路径: {import_helper_errs}")
+            except Exception as e:
+                logger.debug(f"[LocalSubDownloader] 通过CategoryHelper动态获取分类配置失败: {e}")
+
+        # 策略 3：查询数据库中的分类整理模型 (V1/早期版)
+        if not paths:
+            try:
+                from app.db import get_db
+                db = next(get_db())
+                
+                # 动态尝试多种导入路径
+                TransferCategory = None
+                import_errs = []
+                
+                # 尝试一：原 V1/V2 常用导入路径
+                try:
+                    from app.db.models.transfer_category import TransferCategory
+                except Exception as e:
+                    import_errs.append(f"app.db.models.transfer_category: {e}")
+                    
+                # 尝试二：从 models 直接导入
+                if not TransferCategory:
+                    try:
+                        from app.db.models import TransferCategory
+                    except Exception as e:
+                        import_errs.append(f"app.db.models: {e}")
+                        
+                # 尝试三：可能在 transfer 下
+                if not TransferCategory:
+                    try:
+                        from app.db.models.transfer import TransferCategory
+                    except Exception as e:
+                        import_errs.append(f"app.db.models.transfer: {e}")
+
+                # 尝试四：可能在 category 下
+                if not TransferCategory:
+                    try:
+                        from app.db.models.category import TransferCategory
+                    except Exception as e:
+                        import_errs.append(f"app.db.models.category: {e}")
+
+                # 尝试五：通过动态模块反射，深度遍历 app.db.models 寻找包含 Category 的模型类
+                if not TransferCategory:
+                    try:
+                        import app.db.models as models
+                        for attr_name in dir(models):
+                            if "Category" in attr_name or "Transfer" in attr_name:
+                                attr_value = getattr(models, attr_name)
+                                if isinstance(attr_value, type) and hasattr(attr_value, "metadata"):
+                                    TransferCategory = attr_value
+                                    logger.info(f"[LocalSubDownloader] 动态反射识别到数据库分类模型: {attr_name}")
+                                    break
+                    except Exception as e:
+                        import_errs.append(f"app.db.models dir scan: {e}")
+
+                if TransferCategory:
+                    categories = db.query(TransferCategory).all()
+                    for cat in categories:
+                        # 提取媒体库存储目录
+                        if getattr(cat, "library_path", None):
+                            paths.add(Path(cat.library_path))
+                        # 提取下载资源整理目录
+                        if getattr(cat, "download_path", None):
+                            paths.add(Path(cat.download_path))
+                else:
+                    logger.debug(f"[LocalSubDownloader] 无法定位到 TransferCategory 数据库模型，已试过所有导入路径: {import_errs}")
+            except Exception as e:
+                logger.debug(f"[LocalSubDownloader] 通过ORM数据库动态提取分类目录失败: {e}")
+
+        # 策略 4：从 settings 里面动态反射获取所有以 _PATH 结尾的属性
         try:
-            from app.helper.category import CategoryHelper
-            categories = CategoryHelper().get_categories() or []
-            for cat in categories:
-                if isinstance(cat, dict):
-                    dl_path = cat.get("download_path")
-                    lib_path = cat.get("library_path")
-                    if dl_path:
-                        paths.add(Path(dl_path))
-                    if lib_path:
-                        paths.add(Path(lib_path))
-                elif hasattr(cat, "download_path"):
-                    if getattr(cat, "download_path"):
-                        paths.add(Path(cat.download_path))
-                    if getattr(cat, "library_path"):
-                        paths.add(Path(cat.library_path))
+            for attr_name in dir(settings):
+                if attr_name.endswith("_PATH") or "PATH" in attr_name:
+                    try:
+                        val = getattr(settings, attr_name)
+                        if val and isinstance(val, (str, Path)):
+                            paths.add(Path(str(val).strip()))
+                    except Exception:
+                        pass
         except Exception as e:
-            logger.error(f"[LocalSubDownloader] 通过CategoryHelper获取分类配置失败: {e}")
+            logger.debug(f"[LocalSubDownloader] 动态反射全局 settings 路径失败: {e}")
 
-        # 策略 3：从 MoviePilot 系统基本全局设置中兜底读取
+        # 策略 5：系统基本全局设置中兜底读取
         try:
             if hasattr(settings, "LIBRARY_PATH") and settings.LIBRARY_PATH:
                 paths.add(Path(settings.LIBRARY_PATH))
             if hasattr(settings, "DOWNLOAD_PATH") and settings.DOWNLOAD_PATH:
                 paths.add(Path(settings.DOWNLOAD_PATH))
         except Exception as e:
-            logger.error(f"[LocalSubDownloader] 从全局settings中读取基础路径失败: {e}")
+            logger.debug(f"[LocalSubDownloader] 从全局settings中读取基础路径失败: {e}")
 
         # 过滤校验，只保留物理存在并且有读写权限的真实文件夹路径
         valid_paths = []
         for p in paths:
             try:
                 if p and p.exists() and p.is_dir():
-                    # 避免子目录冗余扫描（比如如果父目录已经在集合中，就不必再重复扫子目录，这里简单去重）
+                    # 过滤掉一些明显不是媒体库的短路径或虚拟路径，比如根目录 '/'
+                    if len(p.parts) <= 1:
+                        continue
                     valid_paths.append(p)
             except Exception:
                 pass
