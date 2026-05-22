@@ -409,97 +409,50 @@ class LocalSubDownloader(_PluginBase):
             sub_dirs.sort()
             video_files.sort(key=lambda x: x.name)
 
-        # 构造根目录高颜值快捷切换按钮
-        root_buttons = []
-        if root_paths:
-            for p in root_paths:
-                p_str = str(p)
-                is_active = (p_str == current_root)
-                root_buttons.append({
-                    'component': 'VCol',
-                    'props': {'cols': 12, 'sm': 6, 'md': 4},
-                    'content': [
-                        {
-                            'component': 'VBtn',
-                            'text': p_str,
-                            'props': {
-                                'color': 'deep-purple-darken-1' if is_active else 'grey-lighten-4',
-                                'variant': 'flat' if is_active else 'tonal',
-                                'block': True,
-                                'prepend-icon': 'mdi-folder-home' if is_active else 'mdi-folder-outline',
-                                'class': 'text-none justify-start text-truncate',
-                                'style': {
-                                    'border': '1px solid ' + ('#5E35B1' if is_active else '#E0E0E0'),
-                                    'boxShadow': '0 2px 4px rgba(94, 53, 177, 0.15)' if is_active else 'none'
-                                }
-                            },
-                            'events': {
-                                'click': {
-                                    'api': 'plugin/LocalSubDownloader/change_root',
-                                    'method': 'post',
-                                    'params': {'root_path': p_str}
-                                }
-                            }
-                        }
-                    ]
-                })
-        else:
-            root_buttons.append({
-                'component': 'VCol',
-                'props': {'cols': 12},
+        # 根目录下拉组件数据源
+        root_items = [{"title": f"📂 {p}", "value": str(p)} for p in root_paths]
+
+        # 构造子目录导航下拉组件 (VAutocomplete，支持入力过滤)
+        dir_items = [{"title": f"📁 {d}", "value": d} for d in sub_dirs]
+        dir_navigation = []
+        if sub_dirs:
+            dir_navigation.append({
+                'component': 'VRow',
                 'content': [
                     {
-                        'component': 'VAlert',
-                        'props': {
-                            'type': 'error',
-                            'variant': 'tonal',
-                            'text': '❌ 未检测到系统媒体整理根路径，请先在 MoviePilot 的基础设置中配置整理路径。'
-                        }
+                        'component': 'VCol',
+                        'props': {'cols': 12},
+                        'content': [
+                            {
+                                'component': 'VAutocomplete',
+                                'props': {
+                                    'model': 'sub_dir',
+                                    'label': f'🔍 输入名称/拼音以过滤当前目录下 {len(sub_dirs)} 个子文件夹 (选中即可导航进入)',
+                                    'items': dir_items,
+                                    'variant': 'outlined',
+                                    'density': 'comfortable',
+                                    'clearable': True,
+                                    'prepend-inner-icon': 'mdi-folder-search'
+                                },
+                                'events': {
+                                    'change': {
+                                        'api': 'plugin/LocalSubDownloader/go_into',
+                                        'method': 'post',
+                                        'params': {'dir_name': '{{sub_dir}}'}
+                                    }
+                                }
+                            }
+                        ]
                     }
                 ]
             })
-
-        # 构造子目录快捷导航按钮
-        dir_buttons = []
-        if sub_dirs:
-            for d in sub_dirs:
-                dir_buttons.append({
-                    'component': 'VCol',
-                    'props': {'cols': 12, 'sm': 4, 'md': 3},
-                    'content': [
-                        {
-                            'component': 'VBtn',
-                            'text': d,
-                            'props': {
-                                'color': 'indigo-lighten-4',
-                                'variant': 'tonal',
-                                'block': True,
-                                'prepend-icon': 'mdi-folder',
-                                'class': 'text-none justify-start text-truncate'
-                            },
-                            'events': {
-                                'click': {
-                                    'api': 'plugin/LocalSubDownloader/go_into',
-                                    'method': 'post',
-                                    'params': {'dir_name': d}
-                                }
-                            }
-                        }
-                    ]
-                })
         else:
-            dir_buttons.append({
-                'component': 'VCol',
-                'props': {'cols': 12},
-                'content': [
-                    {
-                        'component': 'VListItem',
-                        'props': {
-                            'title': '（当前目录下无子文件夹）',
-                            'class': 'text-grey'
-                        }
-                    }
-                ]
+            dir_navigation.append({
+                'component': 'VListItem',
+                'props': {
+                    'title': '（当前目录下无子文件夹）',
+                    'class': 'text-grey'
+                }
             })
 
         # 构造视频选择及执行部分
@@ -578,25 +531,37 @@ class LocalSubDownloader(_PluginBase):
                     {
                         'component': 'VCardText',
                         'content': [
-                            # 1. 根目录高颜值平铺切换
-                            {
-                                'component': 'div',
-                                'props': {'class': 'text-subtitle-2 mb-2 d-flex align-center text-grey-darken-1'},
-                                'content': [
-                                    {
-                                        'component': 'VIcon',
-                                        'props': {'icon': 'mdi-folder-cog', 'class': 'mr-1', 'size': 'small'}
-                                    },
-                                    {
-                                        'component': 'span',
-                                        'text': '媒体整理根路径 (点击即可高亮切换整理根目录)：'
-                                    }
-                                ]
-                            },
+                            # 1. 根目录下拉检索与切换
                             {
                                 'component': 'VRow',
-                                'props': {'dense': True, 'class': 'mb-4'},
-                                'content': root_buttons
+                                'props': {'class': 'mb-2'},
+                                'content': [
+                                    {
+                                        'component': 'VCol',
+                                        'props': {'cols': 12},
+                                        'content': [
+                                            {
+                                                'component': 'VAutocomplete',
+                                                'props': {
+                                                    'model': 'root_path',
+                                                    'value': current_root,
+                                                    'label': '📂 媒体整理根路径 (输入拼音/汉字可进行过滤搜索，选中即自动切换)',
+                                                    'items': root_items,
+                                                    'variant': 'outlined',
+                                                    'density': 'comfortable',
+                                                    'clearable': False
+                                                },
+                                                'events': {
+                                                    'change': {
+                                                        'api': 'plugin/LocalSubDownloader/change_root',
+                                                        'method': 'post',
+                                                        'params': {'root_path': '{{root_path}}'}
+                                                    }
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
                             },
                             # 2. 当前路径位置与导航面包屑
                             {
@@ -849,6 +814,27 @@ class LocalSubDownloader(_PluginBase):
             body = await get_request_params(request)
             self.add_log(f"DEBUG: api_change_root 接收到的 body 原始数据: {body}")
             root_path = body.get("root_path") or ""
+            
+            # 智能提取与兜底
+            if not root_path or "{{root_path}}" in root_path:
+                root_path = body.get("value") or ""
+                
+            # 智能交叉检索匹配真实物理路径
+            if not root_path or "{{" in root_path:
+                known_paths = [str(p) for p in self.get_moviepilot_media_paths()]
+                for val in body.values():
+                    val_str = str(val)
+                    if val_str in known_paths:
+                        root_path = val_str
+                        break
+                    # 二级前缀包含式提取
+                    for kp in known_paths:
+                        if val_str == kp or kp in val_str:
+                            root_path = kp
+                            break
+                    if root_path:
+                        break
+
             if root_path:
                 self.save_data("current_root_path", root_path)
                 self.save_data("current_dir_path", root_path)
@@ -888,6 +874,11 @@ class LocalSubDownloader(_PluginBase):
         try:
             body = await get_request_params(request)
             dir_name = body.get("dir_name") or ""
+            
+            # 智能提取与兜底
+            if not dir_name or "{{sub_dir}}" in dir_name:
+                dir_name = body.get("value") or ""
+                
             if not dir_name:
                 return {"code": 1, "message": "目标文件夹名称为空"}
                 
