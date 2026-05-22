@@ -24,7 +24,7 @@ class LocalSubDownloader(_PluginBase):
     # 插件图标
     plugin_icon = "subtitles.png"
     # 插件版本
-    plugin_version = "2.0.1"
+    plugin_version = "2.0.2"
     # 插件作者
     plugin_author = "318182456"
     # 作者主页
@@ -88,6 +88,38 @@ class LocalSubDownloader(_PluginBase):
                 "auth": "bear",
                 "summary": "手动运行整理字幕",
                 "description": "后台异步扫描指定目录路径，为所有视频文件进行字幕爬取",
+            },
+            {
+                "path": "/change_root",
+                "endpoint": self.api_change_root,
+                "methods": ["POST", "GET"],
+                "auth": "bear",
+                "summary": "切换所选根目录",
+                "description": "切换当前手动字幕整理的根目录",
+            },
+            {
+                "path": "/go_up",
+                "endpoint": self.api_go_up,
+                "methods": ["POST", "GET"],
+                "auth": "bear",
+                "summary": "返回上一级目录",
+                "description": "返回当前目录的上一层级",
+            },
+            {
+                "path": "/go_into",
+                "endpoint": self.api_go_into,
+                "methods": ["POST", "GET"],
+                "auth": "bear",
+                "summary": "进入子目录",
+                "description": "进入当前目录的子文件夹",
+            },
+            {
+                "path": "/run_selected",
+                "endpoint": self.api_run_selected,
+                "methods": ["POST", "GET"],
+                "auth": "bear",
+                "summary": "为所选视频下载字幕",
+                "description": "后台异步为前台选中的视频文件下载字幕",
             }
         ]
 
@@ -236,6 +268,23 @@ class LocalSubDownloader(_PluginBase):
     def get_state(self) -> bool:
         return self._enabled
 
+    def get_current_root_path(self) -> str:
+        val = self.get_data("current_root_path")
+        if not val:
+            paths = self.get_moviepilot_media_paths()
+            if paths:
+                val = str(paths[0])
+                self.save_data("current_root_path", val)
+        return val or ""
+
+    def get_current_dir_path(self) -> str:
+        val = self.get_data("current_dir_path")
+        if not val:
+            val = self.get_current_root_path()
+            if val:
+                self.save_data("current_dir_path", val)
+        return val or ""
+
     def get_page(self) -> List[dict]:
         """
         利用 Vuetify JSON 模式，在前台详情页渲染高颜值“手动整理控制台”、“下载历史记录表格”与“深色滚屏日志”。
@@ -264,23 +313,156 @@ class LocalSubDownloader(_PluginBase):
         # 取最近的 50 条日志做滚屏展示
         logs_display = logs[-50:]
 
+        # 手动整理级联选择的核心状态
+        root_paths = self.get_moviepilot_media_paths()
+        current_root = self.get_current_root_path()
+        current_dir = self.get_current_dir_path()
+
+        # 扫描当前浏览目录下的子目录与视频文件
+        sub_dirs = []
+        video_files = []
+        video_extensions = {'.mp4', '.mkv', '.avi', '.ts', '.wmv', '.mov', '.flv', '.rmvb'}
+
+        if current_dir:
+            c_path = Path(current_dir)
+            if c_path.exists() and c_path.is_dir():
+                try:
+                    for item in c_path.iterdir():
+                        if item.name.startswith('.'):
+                            continue
+                        if item.is_dir():
+                            sub_dirs.append(item.name)
+                        elif item.is_file() and item.suffix.lower() in video_extensions:
+                            video_files.append(item)
+                except Exception as e:
+                    logger.error(f"[LocalSubDownloader] 扫描目录 {current_dir} 失败: {e}")
+
+            sub_dirs.sort()
+            video_files.sort(key=lambda x: x.name)
+
+        # 根目录下拉选项
+        root_items = [{"title": str(p), "value": str(p)} for p in root_paths]
+
+        # 构造子目录快捷导航按钮
+        dir_buttons = []
+        if sub_dirs:
+            for d in sub_dirs:
+                dir_buttons.append({
+                    'component': 'VCol',
+                    'props': {'cols': 12, 'sm': 4, 'md': 3},
+                    'content': [
+                        {
+                            'component': 'VBtn',
+                            'props': {
+                                'color': 'indigo-lighten-4',
+                                'variant': 'tonal',
+                                'block': True,
+                                'prepend-icon': 'mdi-folder',
+                                'text': d,
+                                'class': 'text-none justify-start text-truncate'
+                            },
+                            'events': {
+                                'click': {
+                                    'api': 'plugin/LocalSubDownloader/go_into',
+                                    'method': 'post',
+                                    'data': {'dir_name': d}
+                                }
+                            }
+                        }
+                    ]
+                })
+        else:
+            dir_buttons.append({
+                'component': 'VCol',
+                'props': {'cols': 12},
+                'content': [
+                    {
+                        'component': 'VListItem',
+                        'props': {
+                            'title': '（当前目录下无子文件夹）',
+                            'class': 'text-grey'
+                        }
+                    }
+                ]
+            })
+
+        # 构造视频选择及执行部分
+        video_action_component = []
+        if video_files:
+            video_items = [{"title": f"🎬 {v.name}", "value": str(v)} for v in video_files]
+            video_action_component = [
+                {
+                    'component': 'VRow',
+                    'props': {'class': 'mt-2'},
+                    'content': [
+                        {
+                            'component': 'VCol',
+                            'props': {'cols': 12, 'md': 9},
+                            'content': [
+                                {
+                                    'component': 'VAutocomplete',
+                                    'props': {
+                                        'model': 'selected_videos',
+                                        'label': '请勾选需要下载字幕的视频文件 (支持多选)',
+                                        'items': video_items,
+                                        'multiple': True,
+                                        'chips': True,
+                                        'closable-chips': True,
+                                        'clearable': True,
+                                        'variant': 'outlined',
+                                        'density': 'comfortable'
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            'component': 'VCol',
+                            'props': {'cols': 12, 'md': 3, 'class': 'd-flex align-center'},
+                            'content': [
+                                {
+                                    'component': 'VBtn',
+                                    'props': {
+                                        'color': 'success',
+                                        'block': True,
+                                        'size': 'large',
+                                        'prepend-icon': 'mdi-cloud-download',
+                                        'text': '🔥 立即开始整理'
+                                    },
+                                    'events': {
+                                        'click': {
+                                            'api': 'plugin/LocalSubDownloader/run_selected',
+                                            'method': 'post',
+                                            'data': {'videos': '{{selected_videos}}'}
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        else:
+            video_action_component = [
+                {
+                    'component': 'VAlert',
+                    'props': {
+                        'type': 'warning',
+                        'variant': 'tonal',
+                        'text': '💡 提示：当前目录下未发现待匹配字幕的视频文件。您可以点击上方子文件夹按钮进入下一层级。',
+                        'class': 'mt-3'
+                    }
+                }
+            ]
+
         return [
             {
                 'component': 'VCard',
-                'props': {'title': '🛠️ 手动字幕整理', 'variant': 'outlined', 'class': 'mb-4'},
+                'props': {'title': '🛠️ 手动字幕整理控制台', 'variant': 'outlined', 'class': 'mb-4'},
                 'content': [
                     {
                         'component': 'VCardText',
                         'content': [
-                            {
-                                'component': 'VAlert',
-                                'props': {
-                                    'type': 'info',
-                                    'variant': 'tonal',
-                                    'text': '请输入您需要扫描的绝对路径。留空不输则系统将自动为您提取 MoviePilot 目录配置中设置的【综艺、电影、电视剧】的所有媒体库及资源路径进行全量扫描！',
-                                    'class': 'mb-4'
-                                }
-                            },
+                            # 1. 根目录选择与切换
                             {
                                 'component': 'VRow',
                                 'content': [
@@ -289,11 +471,13 @@ class LocalSubDownloader(_PluginBase):
                                         'props': {'cols': 12, 'md': 9},
                                         'content': [
                                             {
-                                                'component': 'VTextField',
+                                                'component': 'VSelect',
                                                 'props': {
-                                                    'model': 'scan_path',
-                                                    'label': '待扫描整理的媒体绝对目录路径 (如 D:\\Media)',
-                                                    'placeholder': '留空不输将全自动获取 MoviePilot 配置的多媒体目录结构进行一键全量检索'
+                                                    'model': 'root_path',
+                                                    'label': '媒体整理根路径 (MoviePilot配置的所有整理后路径)',
+                                                    'items': root_items,
+                                                    'variant': 'outlined',
+                                                    'density': 'comfortable'
                                                 }
                                             }
                                         ]
@@ -306,21 +490,92 @@ class LocalSubDownloader(_PluginBase):
                                                 'component': 'VBtn',
                                                 'props': {
                                                     'color': 'primary',
-                                                    'text': '🔥 立即开始整理',
-                                                    'block': True
+                                                    'block': True,
+                                                    'size': 'large',
+                                                    'prepend-icon': 'mdi-folder-swap',
+                                                    'text': '切换根目录'
                                                 },
-                                                # 在 Vuetify JSON 事件机制中，通过 action 触发
-                                                'on': {
+                                                'events': {
                                                     'click': {
-                                                        'action': 'localsubdownloader_run',
-                                                        'data': {'path': '{{scan_path}}'}
+                                                        'api': 'plugin/LocalSubDownloader/change_root',
+                                                        'method': 'post',
+                                                        'data': {'root_path': '{{root_path}}'}
                                                     }
                                                 }
                                             }
                                         ]
                                     }
                                 ]
-                            }
+                            },
+                            # 2. 当前路径位置与导航面包屑
+                            {
+                                'component': 'VRow',
+                                'props': {'class': 'align-center mb-2'},
+                                'content': [
+                                    {
+                                        'component': 'VCol',
+                                        'props': {'cols': 12, 'md': 9},
+                                        'content': [
+                                            {
+                                                'component': 'VAlert',
+                                                'props': {
+                                                    'type': 'info',
+                                                    'variant': 'tonal',
+                                                    'icon': 'mdi-folder-open',
+                                                    'text': f"当前目录: {current_dir or '未选择'}",
+                                                    'density': 'compact'
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        'component': 'VCol',
+                                        'props': {'cols': 12, 'md': 3},
+                                        'content': [
+                                            {
+                                                'component': 'VBtn',
+                                                'props': {
+                                                    'variant': 'outlined',
+                                                    'color': 'secondary',
+                                                    'block': True,
+                                                    'prepend-icon': 'mdi-arrow-up',
+                                                    'disabled': not current_dir or current_dir == current_root,
+                                                    'text': '返回上一级'
+                                                },
+                                                'events': {
+                                                    'click': {
+                                                        'api': 'plugin/LocalSubDownloader/go_up',
+                                                        'method': 'post'
+                                                    }
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            # 3. 逐级子目录列表
+                            {
+                                'component': 'VCard',
+                                'props': {
+                                    'title': '📁 子目录列表 (可点击进入下一级)',
+                                    'variant': 'tonal',
+                                    'class': 'mb-4 bg-grey-lighten-4'
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VCardText',
+                                        'content': [
+                                            {
+                                                'component': 'VRow',
+                                                'props': {'dense': True},
+                                                'content': dir_buttons
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            # 4. 视频列表与字幕爬取执行
+                            *video_action_component
                         ]
                     }
                 ]
@@ -497,6 +752,125 @@ class LocalSubDownloader(_PluginBase):
             return {"code": 0, "message": "手动整理任务已在后台启动，请查看下方实时运行日志"}
         except Exception as e:
             return {"code": 1, "message": f"启动整理失败: {e}"}
+
+    def api_change_root(self, **kwargs) -> Any:
+        """
+        前台 POST 请求调用的端点：切换当前整理根目录
+        """
+        try:
+            body = kwargs or {}
+            root_path = body.get("root_path") or ""
+            if root_path:
+                self.save_data("current_root_path", root_path)
+                self.save_data("current_dir_path", root_path)
+                self.add_log(f"📌 手动整理根目录已切换为: {root_path}")
+                return {"code": 0, "message": f"根目录已成功切换为: {root_path}"}
+            return {"code": 1, "message": "切换根目录失败：接收到的路径为空"}
+        except Exception as e:
+            return {"code": 1, "message": f"切换根目录失败: {e}"}
+
+    def api_go_up(self, **kwargs) -> Any:
+        """
+        前台 POST 请求调用的端点：返回上一级目录
+        """
+        try:
+            current_dir = self.get_current_dir_path()
+            if not current_dir:
+                return {"code": 1, "message": "当前浏览路径为空"}
+            
+            path = Path(current_dir)
+            parent_path = path.parent
+            root_path = self.get_current_root_path()
+            
+            # 限制返回上一级时不能超出设定的根目录
+            if root_path and not str(parent_path).startswith(root_path):
+                return {"code": 1, "message": "已到达当前所选根目录的最顶层，无法继续返回上一级"}
+                
+            self.save_data("current_dir_path", str(parent_path))
+            self.add_log(f"📁 已返回上一级目录: {parent_path}")
+            return {"code": 0, "message": f"已成功返回上一级: {parent_path}"}
+        except Exception as e:
+            return {"code": 1, "message": f"返回上一级失败: {e}"}
+
+    def api_go_into(self, **kwargs) -> Any:
+        """
+        前台 POST 请求调用的端点：进入子目录
+        """
+        try:
+            body = kwargs or {}
+            dir_name = body.get("dir_name") or ""
+            if not dir_name:
+                return {"code": 1, "message": "目标文件夹名称为空"}
+                
+            current_dir = self.get_current_dir_path()
+            if not current_dir:
+                return {"code": 1, "message": "当前浏览路径为空"}
+                
+            next_path = Path(current_dir) / dir_name
+            if next_path.exists() and next_path.is_dir():
+                self.save_data("current_dir_path", str(next_path))
+                self.add_log(f"📁 已进入子目录: {dir_name}")
+                return {"code": 0, "message": f"已成功进入目录: {dir_name}"}
+            return {"code": 1, "message": "目标文件夹不存在或不是目录"}
+        except Exception as e:
+            return {"code": 1, "message": f"进入子目录失败: {e}"}
+
+    def api_run_selected(self, **kwargs) -> Any:
+        """
+        前台 POST 请求调用的端点：批量整理选中的视频字幕
+        """
+        try:
+            body = kwargs or {}
+            videos = body.get("videos")
+            if not videos:
+                return {"code": 1, "message": "请先勾选需要下载字幕的视频文件！"}
+                
+            video_list = []
+            if isinstance(videos, list):
+                video_list = videos
+            elif isinstance(videos, str):
+                if videos.startswith("[") and videos.endswith("]"):
+                    try:
+                        video_list = json.loads(videos)
+                    except Exception:
+                        video_list = [v.strip() for v in videos.split(",") if v.strip()]
+                else:
+                    video_list = [v.strip() for v in videos.split(",") if v.strip()]
+                    
+            if not video_list:
+                return {"code": 1, "message": "未能解析出有效的视频文件路径"}
+                
+            # 开启异步后台线程下载，规避超时
+            thread = threading.Thread(target=self._process_selected_videos, args=(video_list,))
+            thread.daemon = True
+            thread.start()
+            
+            return {"code": 0, "message": f"已成功启动 {len(video_list)} 个视频的字幕下载任务，请在下方观察实时运行日志"}
+        except Exception as e:
+            return {"code": 1, "message": f"启动批量字幕下载失败: {e}"}
+
+    def _process_selected_videos(self, video_paths: List[str]):
+        """
+        异步后台线程执行：批量为选定的视频下载字幕
+        """
+        self.add_log("========================================")
+        self.add_log(f"▶️ 开始为选定的 {len(video_paths)} 个视频文件下载字幕...")
+        self.add_log("========================================")
+        
+        success_count = 0
+        total = len(video_paths)
+        for idx, path_str in enumerate(video_paths):
+            try:
+                video_path = Path(path_str)
+                self.add_log(f"⏳ [{idx + 1}/{total}] 正在处理视频: {video_path.name}")
+                if self.process_video(video_path):
+                    success_count += 1
+            except Exception as e:
+                self.add_log(f"❌ 匹配 {Path(path_str).name} 字幕发生错误: {e}")
+                
+        self.add_log("========================================")
+        self.add_log(f"🎉 选定视频字幕下载完毕！成功匹配并更新了 {success_count}/{total} 个视频的字幕")
+        self.add_log("========================================")
 
     def manual_run(self, path_str: str = None):
         """
