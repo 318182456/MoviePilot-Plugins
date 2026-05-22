@@ -434,7 +434,7 @@ class LocalSubDownloader(_PluginBase):
                                 'click': {
                                     'api': 'plugin/LocalSubDownloader/go_into',
                                     'method': 'post',
-                                    'data': {'dir_name': d}
+                                    'params': {'dir_name': d}
                                 }
                             }
                         }
@@ -501,7 +501,7 @@ class LocalSubDownloader(_PluginBase):
                                         'click': {
                                             'api': 'plugin/LocalSubDownloader/run_selected',
                                             'method': 'post',
-                                            'data': {'videos': '{{selected_videos}}'}
+                                            'params': {'videos': '{{selected_videos}}'}
                                         }
                                     }
                                 }
@@ -569,7 +569,7 @@ class LocalSubDownloader(_PluginBase):
                                                     'click': {
                                                         'api': 'plugin/LocalSubDownloader/change_root',
                                                         'method': 'post',
-                                                        'data': {'root_path': '{{root_path}}'}
+                                                        'params': {'root_path': '{{root_path}}'}
                                                     }
                                                 }
                                             }
