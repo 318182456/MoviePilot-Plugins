@@ -409,8 +409,55 @@ class LocalSubDownloader(_PluginBase):
             sub_dirs.sort()
             video_files.sort(key=lambda x: x.name)
 
-        # 根目录下拉选项
-        root_items = [{"title": str(p), "value": str(p)} for p in root_paths]
+        # 构造根目录高颜值快捷切换按钮
+        root_buttons = []
+        if root_paths:
+            for p in root_paths:
+                p_str = str(p)
+                is_active = (p_str == current_root)
+                root_buttons.append({
+                    'component': 'VCol',
+                    'props': {'cols': 12, 'sm': 6, 'md': 4},
+                    'content': [
+                        {
+                            'component': 'VBtn',
+                            'text': p_str,
+                            'props': {
+                                'color': 'deep-purple-darken-1' if is_active else 'grey-lighten-4',
+                                'variant': 'flat' if is_active else 'tonal',
+                                'block': True,
+                                'prepend-icon': 'mdi-folder-home' if is_active else 'mdi-folder-outline',
+                                'class': 'text-none justify-start text-truncate',
+                                'style': {
+                                    'border': '1px solid ' + ('#5E35B1' if is_active else '#E0E0E0'),
+                                    'boxShadow': '0 2px 4px rgba(94, 53, 177, 0.15)' if is_active else 'none'
+                                }
+                            },
+                            'events': {
+                                'click': {
+                                    'api': 'plugin/LocalSubDownloader/change_root',
+                                    'method': 'post',
+                                    'params': {'root_path': p_str}
+                                }
+                            }
+                        }
+                    ]
+                })
+        else:
+            root_buttons.append({
+                'component': 'VCol',
+                'props': {'cols': 12},
+                'content': [
+                    {
+                        'component': 'VAlert',
+                        'props': {
+                            'type': 'error',
+                            'variant': 'tonal',
+                            'text': '❌ 未检测到系统媒体整理根路径，请先在 MoviePilot 的基础设置中配置整理路径。'
+                        }
+                    }
+                ]
+            })
 
         # 构造子目录快捷导航按钮
         dir_buttons = []
@@ -531,51 +578,25 @@ class LocalSubDownloader(_PluginBase):
                     {
                         'component': 'VCardText',
                         'content': [
-                            # 1. 根目录选择与切换
+                            # 1. 根目录高颜值平铺切换
                             {
-                                'component': 'VRow',
+                                'component': 'div',
+                                'props': {'class': 'text-subtitle-2 mb-2 d-flex align-center text-grey-darken-1'},
                                 'content': [
                                     {
-                                        'component': 'VCol',
-                                        'props': {'cols': 12, 'md': 9},
-                                        'content': [
-                                            {
-                                                'component': 'VSelect',
-                                                'props': {
-                                                    'model': 'root_path',
-                                                    'value': current_root,
-                                                    'label': '媒体整理根路径 (MoviePilot配置的所有整理后路径)',
-                                                    'items': root_items,
-                                                    'variant': 'outlined',
-                                                    'density': 'comfortable'
-                                                }
-                                            }
-                                        ]
+                                        'component': 'VIcon',
+                                        'props': {'icon': 'mdi-folder-cog', 'class': 'mr-1', 'size': 'small'}
                                     },
                                     {
-                                        'component': 'VCol',
-                                        'props': {'cols': 12, 'md': 3, 'class': 'd-flex align-center'},
-                                        'content': [
-                                            {
-                                                'component': 'VBtn',
-                                                'text': '切换根目录',
-                                                'props': {
-                                                    'color': 'primary',
-                                                    'block': True,
-                                                    'size': 'large',
-                                                    'prepend-icon': 'mdi-folder-swap'
-                                                },
-                                                'events': {
-                                                    'click': {
-                                                        'api': 'plugin/LocalSubDownloader/change_root',
-                                                        'method': 'post',
-                                                        'params': {'root_path': '{{root_path}}'}
-                                                    }
-                                                }
-                                            }
-                                        ]
+                                        'component': 'span',
+                                        'text': '媒体整理根路径 (点击即可高亮切换整理根目录)：'
                                     }
                                 ]
+                            },
+                            {
+                                'component': 'VRow',
+                                'props': {'dense': True, 'class': 'mb-4'},
+                                'content': root_buttons
                             },
                             # 2. 当前路径位置与导航面包屑
                             {
