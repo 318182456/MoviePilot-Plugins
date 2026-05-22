@@ -24,7 +24,7 @@ class LocalSubDownloader(_PluginBase):
     # 插件图标
     plugin_icon = "subtitles.png"
     # 插件版本
-    plugin_version = "2.0.0"
+    plugin_version = "2.0.1"
     # 插件作者
     plugin_author = "318182456"
     # 作者主页
@@ -36,15 +36,9 @@ class LocalSubDownloader(_PluginBase):
     # 可使用的用户级别
     auth_level = 1
 
-    # 配置变量
-    _enabled = False
-    _only_chinese = True
-    _shooter_enabled = True
-    _xunlei_enabled = True
-    _assrt_enabled = False
-    _assrt_token = ""
-    _subdl_enabled = False
-    _subdl_api_key = ""
+    # 内存缓存，用于避免数据库写锁、延迟以及高频读写对前台实时渲染带来的性能与可见性影响
+    _logs_cache = []
+    _history_cache = []
 
     def init_plugin(self, config: dict = None):
         if config:
@@ -56,6 +50,14 @@ class LocalSubDownloader(_PluginBase):
             self._assrt_token = config.get("assrt_token", "").strip()
             self._subdl_enabled = config.get("subdl_enabled", False)
             self._subdl_api_key = config.get("subdl_api_key", "").strip()
+
+        # 初始化加载持久化日志与历史到内存，确保双保险
+        try:
+            self._logs_cache = self.get_data("logs") or []
+            self._history_cache = self.get_data("history") or []
+        except Exception:
+            self._logs_cache = []
+            self._history_cache = []
 
     @staticmethod
     def get_command() -> List[Dict[str, Any]]:
@@ -238,8 +240,14 @@ class LocalSubDownloader(_PluginBase):
         """
         利用 Vuetify JSON 模式，在前台详情页渲染高颜值“手动整理控制台”、“下载历史记录表格”与“深色滚屏日志”。
         """
-        history = self.get_data("history") or []
-        logs = self.get_data("logs") or []
+        # 优先从内存缓存中获取，保障前台刷新页面时无数据库锁等待延迟
+        history = getattr(self, "_history_cache", None)
+        if history is None:
+            history = self.get_data("history") or []
+
+        logs = getattr(self, "_logs_cache", None)
+        if logs is None:
+            logs = self.get_data("logs") or []
 
         # 构造表格记录行
         history_rows = []
@@ -269,7 +277,7 @@ class LocalSubDownloader(_PluginBase):
                                 'props': {
                                     'type': 'info',
                                     'variant': 'tonal',
-                                    'text': '请输入您需要扫描的绝对路径。留空不输则系统将尝试自动扫描 MoviePilot 全量媒体目录。',
+                                    'text': '请输入您需要扫描的绝对路径。留空不输则系统将自动为您提取 MoviePilot 目录配置中设置的【综艺、电影、电视剧】的所有媒体库及资源路径进行全量扫描！',
                                     'class': 'mb-4'
                                 }
                             },
@@ -285,7 +293,7 @@ class LocalSubDownloader(_PluginBase):
                                                 'props': {
                                                     'model': 'scan_path',
                                                     'label': '待扫描整理的媒体绝对目录路径 (如 D:\\Media)',
-                                                    'placeholder': '不输入默认使用 MoviePilot 主媒体库目录'
+                                                    'placeholder': '留空不输将全自动获取 MoviePilot 配置的多媒体目录结构进行一键全量检索'
                                                 }
                                             }
                                         ]
@@ -352,6 +360,16 @@ class LocalSubDownloader(_PluginBase):
                         'component': 'VCardText',
                         'content': [
                             {
+                                'component': 'VAlert',
+                                'props': {
+                                    'type': 'warning',
+                                    'variant': 'tonal',
+                                    'text': '💡 提示：因为 MoviePilot 插件页面为静态渲染，在点击“立即开始整理”后，请手动刷新浏览器网页以刷新拉取并展现最新执行进度！',
+                                    'class': 'mb-3',
+                                    'density': 'compact'
+                                }
+                            },
+                            {
                                 'component': 'VList',
                                 'props': {
                                     'density': 'compact',
@@ -385,11 +403,15 @@ class LocalSubDownloader(_PluginBase):
         logger.info(f"[LocalSubDownloader] {msg}")
 
         try:
-            logs = self.get_data("logs") or []
-            logs.append(log_line)
-            if len(logs) > 150:
-                logs = logs[-150:]
-            self.save_data("logs", logs)
+            # 双保险：同步操作内存缓存和持久化
+            if not hasattr(self, "_logs_cache") or self._logs_cache is None:
+                self._logs_cache = self.get_data("logs") or []
+            
+            self._logs_cache.append(log_line)
+            if len(self._logs_cache) > 150:
+                self._logs_cache = self._logs_cache[-150:]
+            
+            self.save_data("logs", self._logs_cache)
         except Exception as e:
             logger.error(f"[LocalSubDownloader] 追加日志失败: {e}")
 
@@ -399,17 +421,20 @@ class LocalSubDownloader(_PluginBase):
         """
         time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         try:
-            history = self.get_data("history") or []
-            history.append({
+            if not hasattr(self, "_history_cache") or self._history_cache is None:
+                self._history_cache = self.get_data("history") or []
+
+            self._history_cache.append({
                 "time": time_str,
                 "video": video,
                 "source": source,
                 "file": file,
                 "status": status
             })
-            if len(history) > 50:
-                history = history[-50:]
-            self.save_data("history", history)
+            if len(self._history_cache) > 50:
+                self._history_cache = self._history_cache[-50:]
+
+            self.save_data("history", self._history_cache)
         except Exception as e:
             logger.error(f"[LocalSubDownloader] 追加下载历史失败: {e}")
 
@@ -481,40 +506,129 @@ class LocalSubDownloader(_PluginBase):
         thread.daemon = True
         thread.start()
 
+    def get_moviepilot_media_paths(self) -> List[Path]:
+        """
+        自动探测并提取 MoviePilot 中用户在数据库和后台配置的所有媒体库目录与资源整理目录
+        """
+        paths = set()
+
+        # 策略 1：查询数据库中的 TransferCategory 模型，提取用户配置的所有分类整理路径
+        try:
+            from app.db import get_db
+            from app.db.models.transfer_category import TransferCategory
+            db = next(get_db())
+            categories = db.query(TransferCategory).all()
+            for cat in categories:
+                # 提取媒体库存储目录
+                if getattr(cat, "library_path", None):
+                    paths.add(Path(cat.library_path))
+                # 提取下载资源整理目录
+                if getattr(cat, "download_path", None):
+                    paths.add(Path(cat.download_path))
+        except Exception as e:
+            logger.error(f"[LocalSubDownloader] 通过ORM数据库提取分类目录失败: {e}")
+
+        # 策略 2：通过 MoviePilot 系统内置的 CategoryHelper 获取分类配置
+        try:
+            from app.helper.category import CategoryHelper
+            categories = CategoryHelper().get_categories() or []
+            for cat in categories:
+                if isinstance(cat, dict):
+                    dl_path = cat.get("download_path")
+                    lib_path = cat.get("library_path")
+                    if dl_path:
+                        paths.add(Path(dl_path))
+                    if lib_path:
+                        paths.add(Path(lib_path))
+                elif hasattr(cat, "download_path"):
+                    if getattr(cat, "download_path"):
+                        paths.add(Path(cat.download_path))
+                    if getattr(cat, "library_path"):
+                        paths.add(Path(cat.library_path))
+        except Exception as e:
+            logger.error(f"[LocalSubDownloader] 通过CategoryHelper获取分类配置失败: {e}")
+
+        # 策略 3：从 MoviePilot 系统基本全局设置中兜底读取
+        try:
+            if hasattr(settings, "LIBRARY_PATH") and settings.LIBRARY_PATH:
+                paths.add(Path(settings.LIBRARY_PATH))
+            if hasattr(settings, "DOWNLOAD_PATH") and settings.DOWNLOAD_PATH:
+                paths.add(Path(settings.DOWNLOAD_PATH))
+        except Exception as e:
+            logger.error(f"[LocalSubDownloader] 从全局settings中读取基础路径失败: {e}")
+
+        # 过滤校验，只保留物理存在并且有读写权限的真实文件夹路径
+        valid_paths = []
+        for p in paths:
+            try:
+                if p and p.exists() and p.is_dir():
+                    # 避免子目录冗余扫描（比如如果父目录已经在集合中，就不必再重复扫子目录，这里简单去重）
+                    valid_paths.append(p)
+            except Exception:
+                pass
+        return valid_paths
+
     def _scan_and_process(self, path_str: str = None):
         self.add_log("========================================")
         self.add_log("▶️ 开始进行手动字幕整理...")
         self.add_log("========================================")
 
-        scan_path = None
-        if path_str:
-            scan_path = Path(path_str.strip())
+        scan_paths = []
+        if path_str and path_str.strip():
+            target_path = Path(path_str.strip())
+            if target_path.exists():
+                scan_paths.append(target_path)
+                self.add_log(f"📌 已指定扫描整理目录路径: {target_path}")
+            else:
+                self.add_log(f"❌ 指定的目录路径不存在，无法扫描: {target_path}")
+                self.add_log("⏹️ 手动扫描已中断")
+                return
         else:
-            # 未指定路径时，尝试从宿主主配置中定位默认媒体库目录
-            try:
-                if hasattr(settings, "LIBRARY_PATH") and settings.LIBRARY_PATH:
-                    scan_path = Path(settings.LIBRARY_PATH)
-                elif hasattr(settings, "DOWNLOAD_PATH") and settings.DOWNLOAD_PATH:
-                    scan_path = Path(settings.DOWNLOAD_PATH)
-            except Exception:
-                pass
+            self.add_log("🔍 未指定扫描路径，正在自动获取 MoviePilot 媒体库与分类整理目录配置...")
+            scan_paths = self.get_moviepilot_media_paths()
+            
+            if scan_paths:
+                self.add_log(f"🎯 成功识别并载入了以下 {len(scan_paths)} 个整理目录:")
+                for p in scan_paths:
+                    self.add_log(f" 📂 {p}")
+            else:
+                self.add_log("⚠️ 未能从系统数据库或配置中定位到任何有效的媒体分类整理目录")
 
-        if not scan_path or not scan_path.exists():
-            self.add_log(f"❌ 默认媒体目录不存在或为空，请在上方输入正确的绝对路径。当前指向路径: {scan_path}")
+        if not scan_paths:
+            self.add_log("❌ 没有定位到任何有效的媒体扫描目录。请确认您已在 MoviePilot 目录配置中设置了分类目录，或者在上方输入正确的绝对路径。")
             self.add_log("⏹️ 手动扫描已中断")
             return
 
-        self.add_log(f"🔍 正在检索目录下的所有视频文件: {scan_path}")
         video_extensions = {'.mp4', '.mkv', '.avi', '.ts', '.wmv', '.mov', '.flv', '.rmvb'}
         
+        # 批量汇总检索到的视频文件
         video_files = []
-        try:
-            for item in scan_path.rglob("*"):
-                if item.is_file() and item.suffix.lower() in video_extensions:
-                    video_files.append(item)
-        except Exception as e:
-            self.add_log(f"❌ 读取文件夹内容失败: {e}")
-            return
+        for path in scan_paths:
+            self.add_log(f"🔍 正在递归检索目录下的所有视频文件: {path}")
+            try:
+                for item in path.rglob("*"):
+                    if item.is_file() and item.suffix.lower() in video_extensions:
+                        video_files.append(item)
+            except Exception as e:
+                self.add_log(f"⚠️ 检索目录 {path} 失败: {e}")
+
+        # 去重合并
+        video_files = list(set(video_files))
+        total = len(video_files)
+        self.add_log(f"📊 扫描完成！共定位到 {total} 个视频文件")
+
+        success_count = 0
+        for idx, video_path in enumerate(video_files):
+            try:
+                self.add_log(f"⏳ [{idx + 1}/{total}] 正在处理视频: {video_path.name}")
+                if self.process_video(video_path):
+                    success_count += 1
+            except Exception as e:
+                self.add_log(f"❌ 匹配 {video_path.name} 字幕发生错误: {e}")
+
+        self.add_log("========================================")
+        self.add_log(f"🎉 手动整理完毕！成功匹配并更新了 {success_count}/{total} 个视频的字幕")
+        self.add_log("========================================")
 
         total = len(video_files)
         self.add_log(f"📊 扫描完成！共定位到 {total} 个视频文件")
