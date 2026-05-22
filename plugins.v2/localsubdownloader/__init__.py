@@ -81,10 +81,26 @@ class LocalSubDownloader(_PluginBase):
         """
         注册后台 API 终结点，处理前台的手动整理请求。
         """
+        # 使用局部普通闭包函数，彻底规避 FastAPI 在动态解析绑定类方法（Bound Method）时产生的 self 参数反射与类型丢失导致的 422 错误
+        async def run_wrapper(request: Request):
+            return await self.api_manual_run(request)
+
+        async def change_root_wrapper(request: Request):
+            return await self.api_change_root(request)
+
+        async def go_up_wrapper(request: Request):
+            return await self.api_go_up(request)
+
+        async def go_into_wrapper(request: Request):
+            return await self.api_go_into(request)
+
+        async def run_selected_wrapper(request: Request):
+            return await self.api_run_selected(request)
+
         return [
             {
                 "path": "/run",
-                "endpoint": self.api_manual_run,
+                "endpoint": run_wrapper,
                 "methods": ["POST"],
                 "auth": "bear",
                 "summary": "手动运行整理字幕",
@@ -92,7 +108,7 @@ class LocalSubDownloader(_PluginBase):
             },
             {
                 "path": "/change_root",
-                "endpoint": self.api_change_root,
+                "endpoint": change_root_wrapper,
                 "methods": ["POST", "GET"],
                 "auth": "bear",
                 "summary": "切换所选根目录",
@@ -100,7 +116,7 @@ class LocalSubDownloader(_PluginBase):
             },
             {
                 "path": "/go_up",
-                "endpoint": self.api_go_up,
+                "endpoint": go_up_wrapper,
                 "methods": ["POST", "GET"],
                 "auth": "bear",
                 "summary": "返回上一级目录",
@@ -108,7 +124,7 @@ class LocalSubDownloader(_PluginBase):
             },
             {
                 "path": "/go_into",
-                "endpoint": self.api_go_into,
+                "endpoint": go_into_wrapper,
                 "methods": ["POST", "GET"],
                 "auth": "bear",
                 "summary": "进入子目录",
@@ -116,7 +132,7 @@ class LocalSubDownloader(_PluginBase):
             },
             {
                 "path": "/run_selected",
-                "endpoint": self.api_run_selected,
+                "endpoint": run_selected_wrapper,
                 "methods": ["POST", "GET"],
                 "auth": "bear",
                 "summary": "为所选视频下载字幕",
