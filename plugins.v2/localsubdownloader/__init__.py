@@ -826,6 +826,7 @@ class LocalSubDownloader(_PluginBase):
         """
         try:
             body = await get_request_params(request)
+            self.add_log(f"DEBUG: api_change_root 接收到的 body 原始数据: {body}")
             root_path = body.get("root_path") or ""
             if root_path:
                 self.save_data("current_root_path", root_path)
