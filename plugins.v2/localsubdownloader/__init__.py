@@ -15,6 +15,42 @@ from app.plugins import _PluginBase
 from app.schemas import TransferInfo
 from app.schemas.types import EventType
 from fastapi import Request
+from app.core.plugin import PluginManager
+
+
+async def global_api_manual_run(request: Request) -> Any:
+    instance = PluginManager()._running_plugins.get("LocalSubDownloader")
+    if instance:
+        return await instance.api_manual_run(request)
+    return {"code": 1, "message": "插件实例未加载"}
+
+
+async def global_api_change_root(request: Request) -> Any:
+    instance = PluginManager()._running_plugins.get("LocalSubDownloader")
+    if instance:
+        return await instance.api_change_root(request)
+    return {"code": 1, "message": "插件实例未加载"}
+
+
+async def global_api_go_up(request: Request) -> Any:
+    instance = PluginManager()._running_plugins.get("LocalSubDownloader")
+    if instance:
+        return await instance.api_go_up(request)
+    return {"code": 1, "message": "插件实例未加载"}
+
+
+async def global_api_go_into(request: Request) -> Any:
+    instance = PluginManager()._running_plugins.get("LocalSubDownloader")
+    if instance:
+        return await instance.api_go_into(request)
+    return {"code": 1, "message": "插件实例未加载"}
+
+
+async def global_api_run_selected(request: Request) -> Any:
+    instance = PluginManager()._running_plugins.get("LocalSubDownloader")
+    if instance:
+        return await instance.api_run_selected(request)
+    return {"code": 1, "message": "插件实例未加载"}
 
 
 class LocalSubDownloader(_PluginBase):
@@ -81,26 +117,10 @@ class LocalSubDownloader(_PluginBase):
         """
         注册后台 API 终结点，处理前台的手动整理请求。
         """
-        # 使用局部普通闭包函数，彻底规避 FastAPI 在动态解析绑定类方法（Bound Method）时产生的 self 参数反射与类型丢失导致的 422 错误
-        async def run_wrapper(request: Request):
-            return await self.api_manual_run(request)
-
-        async def change_root_wrapper(request: Request):
-            return await self.api_change_root(request)
-
-        async def go_up_wrapper(request: Request):
-            return await self.api_go_up(request)
-
-        async def go_into_wrapper(request: Request):
-            return await self.api_go_into(request)
-
-        async def run_selected_wrapper(request: Request):
-            return await self.api_run_selected(request)
-
         return [
             {
                 "path": "/run",
-                "endpoint": run_wrapper,
+                "endpoint": global_api_manual_run,
                 "methods": ["POST"],
                 "auth": "bear",
                 "summary": "手动运行整理字幕",
@@ -108,7 +128,7 @@ class LocalSubDownloader(_PluginBase):
             },
             {
                 "path": "/change_root",
-                "endpoint": change_root_wrapper,
+                "endpoint": global_api_change_root,
                 "methods": ["POST", "GET"],
                 "auth": "bear",
                 "summary": "切换所选根目录",
@@ -116,7 +136,7 @@ class LocalSubDownloader(_PluginBase):
             },
             {
                 "path": "/go_up",
-                "endpoint": go_up_wrapper,
+                "endpoint": global_api_go_up,
                 "methods": ["POST", "GET"],
                 "auth": "bear",
                 "summary": "返回上一级目录",
@@ -124,7 +144,7 @@ class LocalSubDownloader(_PluginBase):
             },
             {
                 "path": "/go_into",
-                "endpoint": go_into_wrapper,
+                "endpoint": global_api_go_into,
                 "methods": ["POST", "GET"],
                 "auth": "bear",
                 "summary": "进入子目录",
@@ -132,7 +152,7 @@ class LocalSubDownloader(_PluginBase):
             },
             {
                 "path": "/run_selected",
-                "endpoint": run_selected_wrapper,
+                "endpoint": global_api_run_selected,
                 "methods": ["POST", "GET"],
                 "auth": "bear",
                 "summary": "为所选视频下载字幕",
