@@ -739,27 +739,24 @@ class LocalSubDownloader(_PluginBase):
         path_str = event_data.get("path")
         self.manual_run(path_str)
 
-    def api_manual_run(self, **kwargs) -> Any:
+    def api_manual_run(self, body: dict = None) -> Any:
         """
         前台 POST 请求调用的端点
         """
         try:
-            # 兼容 multipart/form-data 或 json 负载
-            body = {}
-            if kwargs:
-                body = kwargs
+            body = body or {}
             path_str = body.get("path")
             self.manual_run(path_str)
             return {"code": 0, "message": "手动整理任务已在后台启动，请查看下方实时运行日志"}
         except Exception as e:
             return {"code": 1, "message": f"启动整理失败: {e}"}
 
-    def api_change_root(self, **kwargs) -> Any:
+    def api_change_root(self, body: dict = None) -> Any:
         """
         前台 POST 请求调用的端点：切换当前整理根目录
         """
         try:
-            body = kwargs or {}
+            body = body or {}
             root_path = body.get("root_path") or ""
             if root_path:
                 self.save_data("current_root_path", root_path)
@@ -770,7 +767,7 @@ class LocalSubDownloader(_PluginBase):
         except Exception as e:
             return {"code": 1, "message": f"切换根目录失败: {e}"}
 
-    def api_go_up(self, **kwargs) -> Any:
+    def api_go_up(self, body: dict = None) -> Any:
         """
         前台 POST 请求调用的端点：返回上一级目录
         """
@@ -793,12 +790,12 @@ class LocalSubDownloader(_PluginBase):
         except Exception as e:
             return {"code": 1, "message": f"返回上一级失败: {e}"}
 
-    def api_go_into(self, **kwargs) -> Any:
+    def api_go_into(self, body: dict = None) -> Any:
         """
         前台 POST 请求调用的端点：进入子目录
         """
         try:
-            body = kwargs or {}
+            body = body or {}
             dir_name = body.get("dir_name") or ""
             if not dir_name:
                 return {"code": 1, "message": "目标文件夹名称为空"}
@@ -816,12 +813,12 @@ class LocalSubDownloader(_PluginBase):
         except Exception as e:
             return {"code": 1, "message": f"进入子目录失败: {e}"}
 
-    def api_run_selected(self, **kwargs) -> Any:
+    def api_run_selected(self, body: dict = None) -> Any:
         """
         前台 POST 请求调用的端点：批量整理选中的视频字幕
         """
         try:
-            body = kwargs or {}
+            body = body or {}
             videos = body.get("videos")
             if not videos:
                 return {"code": 1, "message": "请先勾选需要下载字幕的视频文件！"}
