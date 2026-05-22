@@ -2,6 +2,8 @@ import hashlib
 import io
 import json
 import zipfile
+import datetime
+import threading
 from functools import lru_cache
 from pathlib import Path
 from typing import List, Tuple, Dict, Any
@@ -57,10 +59,35 @@ class LocalSubDownloader(_PluginBase):
 
     @staticmethod
     def get_command() -> List[Dict[str, Any]]:
-        pass
+        """
+        注册系统远程指令，支持远程或快捷方式一键触发手动整理。
+        """
+        return [
+            {
+                "cmd": "/localsubdownload",
+                "event": EventType.PluginAction,
+                "desc": "本地字幕下载器：一键手动整理",
+                "category": "插件命令",
+                "data": {
+                    "action": "localsubdownloader_run",
+                },
+            }
+        ]
 
     def get_api(self) -> List[Dict[str, Any]]:
-        pass
+        """
+        注册后台 API 终结点，处理前台的手动整理请求。
+        """
+        return [
+            {
+                "path": "/run",
+                "endpoint": self.api_manual_run,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "手动运行整理字幕",
+                "description": "后台异步扫描指定目录路径，为所有视频文件进行字幕爬取",
+            }
+        ]
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
         return [
@@ -208,10 +235,185 @@ class LocalSubDownloader(_PluginBase):
         return self._enabled
 
     def get_page(self) -> List[dict]:
-        pass
+        """
+        利用 Vuetify JSON 模式，在前台详情页渲染高颜值“手动整理控制台”、“下载历史记录表格”与“深色滚屏日志”。
+        """
+        history = self.get_data("history") or []
+        logs = self.get_data("logs") or []
+
+        # 构造表格记录行
+        history_rows = []
+        for idx, item in enumerate(history):
+            history_rows.append({
+                "index": idx + 1,
+                "time": item.get("time", ""),
+                "video": item.get("video", ""),
+                "source": item.get("source", ""),
+                "file": item.get("file", ""),
+                "status": item.get("status", "")
+            })
+
+        # 取最近的 50 条日志做滚屏展示
+        logs_display = logs[-50:]
+
+        return [
+            {
+                'component': 'VCard',
+                'props': {'title': '🛠️ 手动字幕整理', 'variant': 'outlined', 'class': 'mb-4'},
+                'content': [
+                    {
+                        'component': 'VCardText',
+                        'content': [
+                            {
+                                'component': 'VAlert',
+                                'props': {
+                                    'type': 'info',
+                                    'variant': 'tonal',
+                                    'text': '请输入您需要扫描的绝对路径。留空不输则系统将尝试自动扫描 MoviePilot 全量媒体目录。',
+                                    'class': 'mb-4'
+                                }
+                            },
+                            {
+                                'component': 'VRow',
+                                'content': [
+                                    {
+                                        'component': 'VCol',
+                                        'props': {'cols': 12, 'md': 9},
+                                        'content': [
+                                            {
+                                                'component': 'VTextField',
+                                                'props': {
+                                                    'model': 'scan_path',
+                                                    'label': '待扫描整理的媒体绝对目录路径 (如 D:\\Media)',
+                                                    'placeholder': '不输入默认使用 MoviePilot 主媒体库目录'
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        'component': 'VCol',
+                                        'props': {'cols': 12, 'md': 3, 'class': 'd-flex align-center'},
+                                        'content': [
+                                            {
+                                                'component': 'VBtn',
+                                                'props': {
+                                                    'color': 'primary',
+                                                    'text': '🔥 立即开始整理',
+                                                    'block': True
+                                                },
+                                                # 在 Vuetify JSON 事件机制中，通过 action 触发
+                                                'on': {
+                                                    'click': {
+                                                        'action': 'localsubdownloader_run',
+                                                        'data': {'path': '{{scan_path}}'}
+                                                    }
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                'component': 'VCard',
+                'props': {'title': '📜 历史字幕下载记录', 'variant': 'outlined', 'class': 'mb-4'},
+                'content': [
+                    {
+                        'component': 'VCardText',
+                        'content': [
+                            {
+                                'component': 'VDataTable',
+                                'props': {
+                                    'headers': [
+                                        {'title': '#', 'key': 'index', 'width': '50px'},
+                                        {'title': '时间', 'key': 'time', 'width': '180px'},
+                                        {'title': '视频文件', 'key': 'video'},
+                                        {'title': '字幕来源', 'key': 'source', 'width': '110px'},
+                                        {'title': '保存字幕名', 'key': 'file'},
+                                        {'title': '下载状态', 'key': 'status', 'width': '100px'}
+                                    ],
+                                    'items': list(reversed(history_rows)),
+                                    'density': 'compact',
+                                    'items-per-page': 10
+                                }
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                'component': 'VCard',
+                'props': {'title': '💻 实时运行日志', 'variant': 'outlined'},
+                'content': [
+                    {
+                        'component': 'VCardText',
+                        'content': [
+                            {
+                                'component': 'VList',
+                                'props': {
+                                    'density': 'compact',
+                                    'class': 'bg-grey-darken-4 text-green-accent-3 rounded',
+                                    'style': 'max-height: 250px; overflow-y: auto; font-family: monospace;'
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VListItem',
+                                        'props': {'title': log}
+                                    } for log in logs_display
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
 
     def stop_service(self):
         pass
+
+    # ================= 持久化日志与历史插槽 =================
+
+    def add_log(self, msg: str):
+        """
+        向控制台输出日志，并记录进插件的实时日志列表中（保留最新 150 条），支持前台渲染展示。
+        """
+        time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_line = f"[{time_str}] {msg}"
+        logger.info(f"[LocalSubDownloader] {msg}")
+
+        try:
+            logs = self.get_data("logs") or []
+            logs.append(log_line)
+            if len(logs) > 150:
+                logs = logs[-150:]
+            self.save_data("logs", logs)
+        except Exception as e:
+            logger.error(f"[LocalSubDownloader] 追加日志失败: {e}")
+
+    def add_history(self, video: str, source: str, file: str, status: str):
+        """
+        追加字幕下载历史记录到插件的 plugindata（保留最新 50 条）。
+        """
+        time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            history = self.get_data("history") or []
+            history.append({
+                "time": time_str,
+                "video": video,
+                "source": source,
+                "file": file,
+                "status": status
+            })
+            if len(history) > 50:
+                history = history[-50:]
+            self.save_data("history", history)
+        except Exception as e:
+            logger.error(f"[LocalSubDownloader] 追加下载历史失败: {e}")
+
+    # ================= 转移完成事件监听 =================
 
     @eventmanager.register(EventType.TransferComplete)
     def download(self, event: Event):
@@ -238,17 +440,106 @@ class LocalSubDownloader(_PluginBase):
             file_path = Path(file_path_str)
             if file_path.suffix.lower() in video_extensions:
                 try:
-                    logger.info(f"[LocalSubDownloader] 检测到视频入库，开始处理字幕: {file_path.name}")
+                    self.add_log(f"检测到视频整理入库，开始处理字幕: {file_path.name}")
                     self.process_video(file_path)
                 except Exception as e:
-                    logger.error(f"[LocalSubDownloader] 处理视频 {file_path.name} 失败: {e}")
+                    self.add_log(f"处理视频 {file_path.name} 失败: {e}")
 
-    def process_video(self, video_path: Path):
-        if not video_path.exists():
-            logger.warn(f"[LocalSubDownloader] 视频文件不存在: {video_path}")
+    # ================= 手动整理/API/远程命令接口处理 =================
+
+    @eventmanager.register(EventType.PluginAction)
+    def run_command(self, event: Event):
+        """
+        监听一键手动整理动作（Event）触发
+        """
+        event_data = event.event_data or {}
+        if event_data.get("action") != "localsubdownloader_run":
+            return
+        path_str = event_data.get("path")
+        self.manual_run(path_str)
+
+    def api_manual_run(self, **kwargs) -> Any:
+        """
+        前台 POST 请求调用的端点
+        """
+        try:
+            # 兼容 multipart/form-data 或 json 负载
+            body = {}
+            if kwargs:
+                body = kwargs
+            path_str = body.get("path")
+            self.manual_run(path_str)
+            return {"code": 0, "message": "手动整理任务已在后台启动，请查看下方实时运行日志"}
+        except Exception as e:
+            return {"code": 1, "message": f"启动整理失败: {e}"}
+
+    def manual_run(self, path_str: str = None):
+        """
+        开启后台线程进行目录扫描，规避网页超时挂起
+        """
+        thread = threading.Thread(target=self._scan_and_process, args=(path_str,))
+        thread.daemon = True
+        thread.start()
+
+    def _scan_and_process(self, path_str: str = None):
+        self.add_log("========================================")
+        self.add_log("▶️ 开始进行手动字幕整理...")
+        self.add_log("========================================")
+
+        scan_path = None
+        if path_str:
+            scan_path = Path(path_str.strip())
+        else:
+            # 未指定路径时，尝试从宿主主配置中定位默认媒体库目录
+            try:
+                if hasattr(settings, "LIBRARY_PATH") and settings.LIBRARY_PATH:
+                    scan_path = Path(settings.LIBRARY_PATH)
+                elif hasattr(settings, "DOWNLOAD_PATH") and settings.DOWNLOAD_PATH:
+                    scan_path = Path(settings.DOWNLOAD_PATH)
+            except Exception:
+                pass
+
+        if not scan_path or not scan_path.exists():
+            self.add_log(f"❌ 默认媒体目录不存在或为空，请在上方输入正确的绝对路径。当前指向路径: {scan_path}")
+            self.add_log("⏹️ 手动扫描已中断")
             return
 
-        # 1. 收集本地已有字幕的 MD5 签名以进行去重
+        self.add_log(f"🔍 正在检索目录下的所有视频文件: {scan_path}")
+        video_extensions = {'.mp4', '.mkv', '.avi', '.ts', '.wmv', '.mov', '.flv', '.rmvb'}
+        
+        video_files = []
+        try:
+            for item in scan_path.rglob("*"):
+                if item.is_file() and item.suffix.lower() in video_extensions:
+                    video_files.append(item)
+        except Exception as e:
+            self.add_log(f"❌ 读取文件夹内容失败: {e}")
+            return
+
+        total = len(video_files)
+        self.add_log(f"📊 扫描完成！共定位到 {total} 个视频文件")
+
+        success_count = 0
+        for idx, video_path in enumerate(video_files):
+            try:
+                self.add_log(f"⏳ [{idx + 1}/{total}] 正在处理视频: {video_path.name}")
+                if self.process_video(video_path):
+                    success_count += 1
+            except Exception as e:
+                self.add_log(f"❌ 匹配 {video_path.name} 字幕发生错误: {e}")
+
+        self.add_log("========================================")
+        self.add_log(f"🎉 手动整理完毕！成功处理了 {success_count}/{total} 个文件")
+        self.add_log("========================================")
+
+    # ================= 视频字幕匹配主干 =================
+
+    def process_video(self, video_path: Path) -> bool:
+        if not video_path.exists():
+            self.add_log(f"⚠️ 视频路径不存在，跳过匹配: {video_path}")
+            return False
+
+        # 1. 收集本地已有字幕 MD5 用于去重
         existing_md5s = set()
         for sub_file in video_path.parent.glob(f"{video_path.stem}*"):
             if sub_file.suffix.lower() in {'.srt', '.ass', '.vtt'}:
@@ -259,47 +550,44 @@ class LocalSubDownloader(_PluginBase):
                 except Exception:
                     pass
 
-        # 2. 精准匹配轨道 (Hash-based) - Shooter & Xunlei
+        # 2. 精准匹配轨道 (Hash-based)
         precision_success = False
 
-        # 2.1 射手网匹配
+        # 2.1 射手网精准匹配
         if self._shooter_enabled:
             try:
                 shooter_hash = self.compute_shooter_hash(video_path)
                 if shooter_hash:
-                    logger.info(f"[LocalSubDownloader] 射手网计算Hash成功: {shooter_hash}，开始发起匹配")
                     precision_success |= self.download_from_shooter(video_path, shooter_hash, existing_md5s)
             except Exception as e:
-                logger.error(f"[LocalSubDownloader] 射手网匹配报错: {e}")
+                logger.error(f"[LocalSubDownloader] 射手哈希匹配报错: {e}")
 
-        # 2.2 迅雷字幕匹配
+        # 2.2 迅雷精准匹配
         if self._xunlei_enabled:
             try:
                 xunlei_cid = self.compute_xunlei_cid(video_path)
                 if xunlei_cid:
-                    logger.info(f"[LocalSubDownloader] 迅雷计算CID成功: {xunlei_cid}，开始发起匹配")
                     precision_success |= self.download_from_xunlei(video_path, xunlei_cid, existing_md5s)
             except Exception as e:
-                logger.error(f"[LocalSubDownloader] 迅雷匹配报错: {e}")
+                logger.error(f"[LocalSubDownloader] 迅雷哈希匹配报错: {e}")
 
-        # 3. 智能模糊评分检索轨道 - ASSRT & A4k (SubDL)
-        # 仅当精准轨道未能匹配到任何可用字幕时，才作为备用链路启用，以节省API调用资源
+        # 3. 智能模糊评分检索轨道 (仅在精准轨道毫无所获且本地无字幕时触发)
         if not precision_success and len(existing_md5s) == 0:
-            logger.info(f"[LocalSubDownloader] 精准轨道未匹配到字幕，将退回到备用模糊评分检索轨道")
-            
-            # 3.1 ASSRT 模糊匹配
+            # 3.1 ASSRT 评分检索
             if self._assrt_enabled and self._assrt_token:
                 try:
-                    self.download_from_assrt(video_path, existing_md5s)
+                    precision_success |= self.download_from_assrt(video_path, existing_md5s)
                 except Exception as e:
-                    logger.error(f"[LocalSubDownloader] ASSRT 模糊检索报错: {e}")
+                    logger.error(f"[LocalSubDownloader] ASSRT评分检索报错: {e}")
 
-            # 3.2 A4k (SubDL) 模糊匹配
+            # 3.2 A4k (SubDL) 评分检索
             if self._subdl_enabled and self._subdl_api_key:
                 try:
-                    self.download_from_subdl(video_path, existing_md5s)
+                    precision_success |= self.download_from_subdl(video_path, existing_md5s)
                 except Exception as e:
-                    logger.error(f"[LocalSubDownloader] SubDL 模糊检索报错: {e}")
+                    logger.error(f"[LocalSubDownloader] SubDL评分检索报错: {e}")
+
+        return precision_success
 
     # ================= 散列算法设计 =================
 
@@ -357,7 +645,7 @@ class LocalSubDownloader(_PluginBase):
             logger.error(f"[LocalSubDownloader] 计算迅雷 CID 出错: {e}")
             return ""
 
-    # ================= 网络请求与备用请求退化机制 =================
+    # ================= 网络请求与退化 =================
 
     def _http_post(self, url: str, headers: dict = None, data: dict = None, json_data: dict = None) -> Any:
         try:
@@ -416,16 +704,12 @@ class LocalSubDownloader(_PluginBase):
                 logger.error(f"[LocalSubDownloader] GET 退化调用失败: {e}")
                 return None
 
-    # ================= 核心下载与智能解压、去重写入 =================
+    # ================= 写入、解压与去重 =================
 
-    def save_subtitle_stream(self, video_path: Path, filename: str, content: bytes, existing_md5s: set) -> bool:
-        """
-        保存下载的字幕流。支持内存解压 zip 压缩包，实现MD5去重过滤并按规范命名保存。
-        """
+    def save_subtitle_stream(self, video_path: Path, filename: str, content: bytes, existing_md5s: set, source_label: str) -> bool:
         if not content:
             return False
 
-        # 收集解包后的字幕 [(filename, bytes)]
         sub_list = []
         if content.startswith(b'PK\x03\x04'):
             try:
@@ -438,7 +722,7 @@ class LocalSubDownloader(_PluginBase):
                             with zf.open(info) as f:
                                 sub_list.append((Path(info.filename).name, f.read()))
             except Exception as e:
-                logger.error(f"[LocalSubDownloader] 解压字幕ZIP失败: {e}")
+                self.add_log(f"⚠️ 解压字幕ZIP包出错: {e}")
         else:
             sub_list.append((filename, content))
 
@@ -447,21 +731,17 @@ class LocalSubDownloader(_PluginBase):
             if not data:
                 continue
 
-            # 内容 MD5 去重
             sub_md5 = hashlib.md5(data).hexdigest()
             if sub_md5 in existing_md5s:
-                logger.info(f"[LocalSubDownloader] 字幕内容与已有文件重复，跳过保存: {name}")
+                self.add_log(f"⏭️ 字幕内容与已有文件完全相同，去重过滤跳过: {name}")
                 continue
 
             ext = Path(name).suffix.lower() or ".srt"
             
-            # 检测语言，若仅下载中文，则进行简单的关键字判断（如果是以 shooter 等获取，通常为中文字幕）
-            # 也可以简单保存为 .zh-cn.srt 等
             lang_suffix = ".zh-cn"
             if "zh-tw" in name.lower() or "cht" in name.lower() or "tc" in name.lower():
                 lang_suffix = ".zh-tw"
             
-            # 生成标准的 MoviePilot 保存文件名
             sub_idx_str = f".{idx}" if idx > 0 else ""
             target_name = f"{video_path.stem}{lang_suffix}{sub_idx_str}{ext}"
             target_path = video_path.parent / target_name
@@ -469,10 +749,12 @@ class LocalSubDownloader(_PluginBase):
             try:
                 target_path.write_bytes(data)
                 existing_md5s.add(sub_md5)
-                logger.info(f"[LocalSubDownloader] 成功保存字幕到: {target_name} ({len(data)} 字节)")
+                self.add_log(f"💾 [下载成功] 从【{source_label}】获取并写入本地字幕: {target_name} ({len(data)} 字节)")
+                self.add_history(video=video_path.name, source=source_label, file=target_name, status="成功")
                 success_any = True
             except Exception as e:
-                logger.error(f"[LocalSubDownloader] 保存字幕文件 {target_name} 失败: {e}")
+                self.add_log(f"❌ 写入字幕文件 {target_name} 失败: {e}")
+                self.add_history(video=video_path.name, source=source_label, file=target_name, status=f"写入失败: {e}")
 
         return success_any
 
@@ -510,7 +792,7 @@ class LocalSubDownloader(_PluginBase):
 
         return score
 
-    # ================= 各源具体 API 请求实现 =================
+    # ================= 各个字幕源具体 API 请求 =================
 
     def download_from_shooter(self, video_path: Path, filehash: str, existing_md5s: set) -> bool:
         url = "https://www.shooter.cn/api/subapi.php"
@@ -522,7 +804,6 @@ class LocalSubDownloader(_PluginBase):
         }
         res = self._http_post(url, data=data)
         if not res or res.status_code != 200:
-            logger.warn(f"[LocalSubDownloader] 射手网请求未返回成功数据")
             return False
 
         try:
@@ -541,18 +822,19 @@ class LocalSubDownloader(_PluginBase):
                     if not link:
                         continue
                     
-                    logger.info(f"[LocalSubDownloader] 射手网匹配到可用字幕，开始下载: {link}")
+                    self.add_log(f"射手网 (精准Hash) 匹配到可用字幕，开始下载...")
                     dl_res = self._http_get(link)
                     if dl_res and dl_res.status_code == 200:
                         success_any |= self.save_subtitle_stream(
                             video_path=video_path,
                             filename=f"shooter_sub.{ext}",
                             content=dl_res.content,
-                            existing_md5s=existing_md5s
+                            existing_md5s=existing_md5s,
+                            source_label="Shooter"
                         )
             return success_any
         except Exception as e:
-            logger.error(f"[LocalSubDownloader] 解析射手网JSON响应失败: {e}")
+            logger.error(f"[LocalSubDownloader] 解析射手API响应失败: {e}")
             return False
 
     def download_from_xunlei(self, video_path: Path, cid: str, existing_md5s: set) -> bool:
@@ -575,7 +857,6 @@ class LocalSubDownloader(_PluginBase):
                 if not surl:
                     continue
 
-                # 语言过滤
                 is_chinese = False
                 if self._only_chinese:
                     chinese_keywords = ["zh", "cn", "chi", "chs", "cht", "双语", "中文", "简", "繁", "国语"]
@@ -587,23 +868,23 @@ class LocalSubDownloader(_PluginBase):
                 if not is_chinese:
                     continue
 
-                logger.info(f"[LocalSubDownloader] 迅雷匹配到可用字幕: {sname}，开始下载")
+                self.add_log(f"迅雷字幕 (精准CID) 匹配到可用字幕，开始下载...")
                 dl_res = self._http_get(surl)
                 if dl_res and dl_res.status_code == 200:
-                    ext = Path(sname).suffix.lower() or ".srt"
                     success_any |= self.save_subtitle_stream(
                         video_path=video_path,
                         filename=sname,
                         content=dl_res.content,
-                        existing_md5s=existing_md5s
+                        existing_md5s=existing_md5s,
+                        source_label="Xunlei"
                     )
             return success_any
         except Exception as e:
-            logger.error(f"[LocalSubDownloader] 解析迅雷响应失败: {e}")
+            logger.error(f"[LocalSubDownloader] 解析迅雷API响应失败: {e}")
             return False
 
     def download_from_assrt(self, video_path: Path, existing_md5s: set) -> bool:
-        # ASSRT 支持以 token 和 shooter hash 精准检索
+        # 优先通过 token 和 shooter hash 精准检索
         shooter_hash = self.compute_shooter_hash(video_path)
         if shooter_hash:
             url_hash = f"https://api.assrt.net/v1/sub/search?token={self._assrt_token}&filehash={shooter_hash}"
@@ -614,8 +895,8 @@ class LocalSubDownloader(_PluginBase):
                     if data.get("status") == 0:
                         subs = data.get("sub", {}).get("subs", [])
                         if subs:
-                            logger.info(f"[LocalSubDownloader] ASSRT (Hash轨) 匹配到 {len(subs)} 个精准字幕")
-                            return self._download_assrt_subs(video_path, subs[:3], existing_md5s)
+                            self.add_log(f"ASSRT (精准Hash) 匹配到可用字幕，开始下载...")
+                            return self._download_assrt_subs(video_path, subs[:2], existing_md5s)
                 except Exception:
                     pass
 
@@ -634,22 +915,19 @@ class LocalSubDownloader(_PluginBase):
             if not subs:
                 return False
 
-            # 时间轴对齐特征关键字打分
             scored_subs = []
             for sub in subs:
                 filename = sub.get("filename", "")
                 score = self.score_subtitle(filename, video_path.name)
                 scored_subs.append((score, sub))
 
-            # 过滤并降序排序
             scored_subs.sort(key=lambda x: x[0], reverse=True)
             top_subs = [item[1] for item in scored_subs if item[0] > 0][:2]
 
             if not top_subs:
-                # 若完全无匹配特征，选取前2个默认项
                 top_subs = subs[:2]
 
-            logger.info(f"[LocalSubDownloader] ASSRT 检索评分完毕，选取前 {len(top_subs)} 个优质字幕发起下载")
+            self.add_log(f"ASSRT (智能特征打分轨) 匹配到 {len(top_subs)} 个字幕，开始下载...")
             return self._download_assrt_subs(video_path, top_subs, existing_md5s)
         except Exception as e:
             logger.error(f"[LocalSubDownloader] 解析 ASSRT 响应失败: {e}")
@@ -663,7 +941,6 @@ class LocalSubDownloader(_PluginBase):
             if not sub_id:
                 continue
 
-            # 获取详情以下载
             detail_url = f"https://api.assrt.net/v1/sub/detail?token={self._assrt_token}&id={sub_id}"
             res = self._http_get(detail_url)
             if res and res.status_code == 200:
@@ -679,14 +956,14 @@ class LocalSubDownloader(_PluginBase):
                                     video_path=video_path,
                                     filename=filename,
                                     content=dl_res.content,
-                                    existing_md5s=existing_md5s
+                                    existing_md5s=existing_md5s,
+                                    source_label="ASSRT"
                                 )
                 except Exception:
                     pass
         return success_any
 
     def download_from_subdl(self, video_path: Path, existing_md5s: set) -> bool:
-        # A4k底座: SubDL 检索
         keyword = video_path.stem
         url = "https://api.subdl.com/api/v1/subtitles"
         params = {
@@ -706,7 +983,6 @@ class LocalSubDownloader(_PluginBase):
             if not subtitles:
                 return False
 
-            # 特征对齐打分
             scored_subs = []
             for sub in subtitles:
                 release_name = sub.get("release_name", "")
@@ -723,14 +999,15 @@ class LocalSubDownloader(_PluginBase):
                 url_dl = sub.get("url")
                 release_name = sub.get("release_name", "subdl_sub.srt")
                 if url_dl:
-                    logger.info(f"[LocalSubDownloader] SubDL (A4k轨) 下载最佳评分字幕: {release_name}")
+                    self.add_log(f"SubDL (智能打分轨) 选中最佳评分字幕，开始下载...")
                     dl_res = self._http_get(url_dl)
                     if dl_res and dl_res.status_code == 200:
                         success_any |= self.save_subtitle_stream(
                             video_path=video_path,
                             filename=release_name,
                             content=dl_res.content,
-                            existing_md5s=existing_md5s
+                            existing_md5s=existing_md5s,
+                            source_label="SubDL"
                         )
             return success_any
         except Exception as e:

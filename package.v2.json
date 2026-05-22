@@ -3,9 +3,9 @@
     "name": "本地轻量字幕下载器",
     "description": "整理入库时自动通过射手、迅雷、ASSRT与A4k(SubDL)匹配并下载本地字幕。具有MD5内容去重与时间轴特征对齐算法。",
     "labels": "字幕",
-    "version": "2.0.0",
+    "version": "2.0.1",
     "icon": "subtitles.png",
-    "author": "Antigravity",
+    "author": "318182456",
     "level": 1,
     "v2": true
   }
