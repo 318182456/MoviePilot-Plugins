@@ -353,12 +353,12 @@ class LocalSubDownloader(_PluginBase):
                     'content': [
                         {
                             'component': 'VBtn',
+                            'text': d,
                             'props': {
                                 'color': 'indigo-lighten-4',
                                 'variant': 'tonal',
                                 'block': True,
                                 'prepend-icon': 'mdi-folder',
-                                'text': d,
                                 'class': 'text-none justify-start text-truncate'
                             },
                             'events': {
@@ -421,12 +421,12 @@ class LocalSubDownloader(_PluginBase):
                             'content': [
                                 {
                                     'component': 'VBtn',
+                                    'text': '🔥 立即开始整理',
                                     'props': {
                                         'color': 'success',
                                         'block': True,
                                         'size': 'large',
-                                        'prepend-icon': 'mdi-cloud-download',
-                                        'text': '🔥 立即开始整理'
+                                        'prepend-icon': 'mdi-cloud-download'
                                     },
                                     'events': {
                                         'click': {
@@ -474,6 +474,7 @@ class LocalSubDownloader(_PluginBase):
                                                 'component': 'VSelect',
                                                 'props': {
                                                     'model': 'root_path',
+                                                    'value': current_root,
                                                     'label': '媒体整理根路径 (MoviePilot配置的所有整理后路径)',
                                                     'items': root_items,
                                                     'variant': 'outlined',
@@ -488,12 +489,12 @@ class LocalSubDownloader(_PluginBase):
                                         'content': [
                                             {
                                                 'component': 'VBtn',
+                                                'text': '切换根目录',
                                                 'props': {
                                                     'color': 'primary',
                                                     'block': True,
                                                     'size': 'large',
-                                                    'prepend-icon': 'mdi-folder-swap',
-                                                    'text': '切换根目录'
+                                                    'prepend-icon': 'mdi-folder-swap'
                                                 },
                                                 'events': {
                                                     'click': {
@@ -534,13 +535,13 @@ class LocalSubDownloader(_PluginBase):
                                         'content': [
                                             {
                                                 'component': 'VBtn',
+                                                'text': '返回上一级',
                                                 'props': {
                                                     'variant': 'outlined',
                                                     'color': 'secondary',
                                                     'block': True,
                                                     'prepend-icon': 'mdi-arrow-up',
-                                                    'disabled': not current_dir or current_dir == current_root,
-                                                    'text': '返回上一级'
+                                                    'disabled': not current_dir or current_dir == current_root
                                                 },
                                                 'events': {
                                                     'click': {
