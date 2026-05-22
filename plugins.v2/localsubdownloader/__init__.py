@@ -50,7 +50,39 @@ async def global_api_run_selected(request: Request) -> Any:
     instance = PluginManager()._running_plugins.get("LocalSubDownloader")
     if instance:
         return await instance.api_run_selected(request)
-    return {"code": 1, "message": "插件实例未加载"}
+async def get_request_params(request: Request) -> dict:
+    """
+    极具鲁棒性的参数提取辅助函数。
+    能够融合处理并合并 Query Params, JSON Body 以及 Form Data，一网打尽所有请求参数。
+    """
+    params = {}
+    
+    # 1. 提取 Query Params
+    try:
+        if request.query_params:
+            params.update({k: v for k, v in request.query_params.items()})
+    except Exception:
+        pass
+        
+    # 2. 提取 Body 参数 (JSON 格式或 Form 表单格式)
+    if request.method in ("POST", "PUT", "PATCH"):
+        # 尝试解析 JSON
+        try:
+            json_body = await request.json()
+            if isinstance(json_body, dict):
+                params.update(json_body)
+        except Exception:
+            pass
+            
+        # 尝试解析 Form 表单 (MultipartForm 或 FormUrlencoded)
+        try:
+            form_data = await request.form()
+            if form_data:
+                params.update({k: v for k, v in form_data.items()})
+        except Exception:
+            pass
+            
+    return params
 
 
 class LocalSubDownloader(_PluginBase):
@@ -781,12 +813,7 @@ class LocalSubDownloader(_PluginBase):
         前台 POST 请求调用的端点
         """
         try:
-            body = {}
-            if request.method == "POST":
-                try:
-                    body = await request.json()
-                except Exception:
-                    body = {}
+            body = await get_request_params(request)
             path_str = body.get("path")
             self.manual_run(path_str)
             return {"code": 0, "message": "手动整理任务已在后台启动，请查看下方实时运行日志"}
@@ -798,12 +825,7 @@ class LocalSubDownloader(_PluginBase):
         前台 POST 请求调用的端点：切换当前整理根目录
         """
         try:
-            body = {}
-            if request.method == "POST":
-                try:
-                    body = await request.json()
-                except Exception:
-                    body = {}
+            body = await get_request_params(request)
             root_path = body.get("root_path") or ""
             if root_path:
                 self.save_data("current_root_path", root_path)
@@ -842,12 +864,7 @@ class LocalSubDownloader(_PluginBase):
         前台 POST 请求调用的端点：进入子目录
         """
         try:
-            body = {}
-            if request.method == "POST":
-                try:
-                    body = await request.json()
-                except Exception:
-                    body = {}
+            body = await get_request_params(request)
             dir_name = body.get("dir_name") or ""
             if not dir_name:
                 return {"code": 1, "message": "目标文件夹名称为空"}
@@ -870,12 +887,7 @@ class LocalSubDownloader(_PluginBase):
         前台 POST 请求调用的端点：批量整理选中的视频字幕
         """
         try:
-            body = {}
-            if request.method == "POST":
-                try:
-                    body = await request.json()
-                except Exception:
-                    body = {}
+            body = await get_request_params(request)
             videos = body.get("videos")
             if not videos:
                 return {"code": 1, "message": "请先勾选需要下载字幕的视频文件！"}
@@ -1110,6 +1122,22 @@ class LocalSubDownloader(_PluginBase):
                     valid_paths.append(p)
             except Exception:
                 pass
+
+        # 强行将持久化在数据库的当前手动字幕整理的根路径(current_root_path)塞入 valid_paths 首位，用以强力兜底与前台选值绑定
+        try:
+            db_root = self.get_data("current_root_path")
+            if db_root:
+                db_path = Path(db_root)
+                # 即使物理上在容器中因为没有挂载或者暂不存在，为了前端 UI 能够正常加载与切换，我们也强行保留并放入最优先位置
+                if db_path not in valid_paths:
+                    valid_paths.insert(0, db_path)
+                else:
+                    # 如果本来就在里面，则调整其到首位，保证它最优先展示与选中
+                    valid_paths.remove(db_path)
+                    valid_paths.insert(0, db_path)
+        except Exception as e:
+            logger.error(f"[LocalSubDownloader] 注入当前保存的根路径兜底时报错: {e}")
+
         return valid_paths
 
     def _scan_and_process(self, path_str: str = None):
