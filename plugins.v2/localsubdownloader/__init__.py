@@ -1203,7 +1203,10 @@ class LocalSubDownloader(_PluginBase):
                 root_path = normalize_path(root_path)
                 self.save_data("current_root_path", root_path)
                 self.save_data("current_dir_path", root_path)
-                self.add_log(f"📌 手动整理根目录已切换为: {root_path}")
+                # 切换路径自动清空勾选缓存，避免旧路径选中遗留
+                self.save_data("selected_videos", [])
+                self._selected_videos_cache = []
+                self.add_log(f"📌 手动整理根目录已切换为: {root_path} (已清空旧路径勾选缓存)")
                 return {"code": 0, "message": f"根目录已成功切换为: {root_path}"}
             return {"code": 1, "message": "切换根目录失败：接收到的路径为空"}
         except Exception as e:
@@ -1227,7 +1230,10 @@ class LocalSubDownloader(_PluginBase):
                 return {"code": 1, "message": "已到达系统最顶层根目录，无法继续返回上一级"}
                 
             self.save_data("current_dir_path", norm_parent)
-            self.add_log(f"📁 已返回上一级目录: {norm_parent}")
+            # 切换路径自动清空勾选缓存，避免旧路径选中遗留
+            self.save_data("selected_videos", [])
+            self._selected_videos_cache = []
+            self.add_log(f"📁 已返回上一级目录: {norm_parent} (已清空旧路径勾选缓存)")
             return {"code": 0, "message": f"已成功返回上一级: {norm_parent}"}
         except Exception as e:
             return {"code": 1, "message": f"返回上一级失败: {e}"}
@@ -1255,7 +1261,10 @@ class LocalSubDownloader(_PluginBase):
             if next_path.exists() and next_path.is_dir():
                 norm_next = normalize_path(next_path)
                 self.save_data("current_dir_path", norm_next)
-                self.add_log(f"📁 已进入子目录: {dir_name}")
+                # 切换路径自动清空勾选缓存，避免旧路径选中遗留
+                self.save_data("selected_videos", [])
+                self._selected_videos_cache = []
+                self.add_log(f"📁 已进入子目录: {dir_name} (已清空旧路径勾选缓存)")
                 return {"code": 0, "message": f"已成功进入目录: {dir_name}"}
             return {"code": 1, "message": "目标文件夹不存在或不是目录"}
         except Exception as e:
