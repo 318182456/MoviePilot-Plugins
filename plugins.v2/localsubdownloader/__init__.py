@@ -716,7 +716,7 @@ class LocalSubDownloader(_PluginBase):
                             *(
                                 [{
                                     'component': 'VRow',
-                                    'props': {'dense': True, 'class': 'mb-2'},
+                                    'props': {'dense': True, 'class': 'mb-2', 'style': 'max-height:220px;overflow-y:auto;'},
                                     'content': [
                                         {
                                             'component': 'VCol',
@@ -793,7 +793,7 @@ class LocalSubDownloader(_PluginBase):
                         'content': (
                             [{
                                 'component': 'VList',
-                                'props': {'density': 'compact', 'lines': 'two'},
+                                'props': {'density': 'compact', 'lines': 'two', 'style': 'max-height:300px;overflow-y:auto;'},
                                 'content': [
                                     item
                                     for row in list(reversed(history_rows))
@@ -1956,8 +1956,15 @@ class LocalSubDownloader(_PluginBase):
                         pass
 
         # 降级为关键字检索评分对齐
+        import re
         keyword = video_path.stem
-        url_search = f"https://api.assrt.net/v1/sub/search?token={self._assrt_token}&q={keyword}&cnt=15"
+        tv_match = re.search(r'^(.+?)\s*-\s*(S\d+E\d+)', keyword, re.IGNORECASE)
+        if tv_match:
+            keyword = f"{tv_match.group(1).strip()} {tv_match.group(2).strip()}"
+        else:
+            keyword = re.sub(r'\s*-\s*', ' ', keyword).strip()
+
+        url_search = f"https://api.assrt.net/v1/sub/search?token={self._assrt_token}&q={urllib.parse.quote(keyword)}&cnt=15"
         res = self._http_get(url_search)
         if not res or res.status_code != 200:
             return False
@@ -2065,12 +2072,19 @@ class LocalSubDownloader(_PluginBase):
         return success_any
 
     def download_from_subdl(self, video_path: Path, existing_md5s: set) -> bool:
+        import re
         keyword = video_path.stem
+        tv_match = re.search(r'^(.+?)\s*-\s*(S\d+E\d+)', keyword, re.IGNORECASE)
+        if tv_match:
+            keyword = f"{tv_match.group(1).strip()} {tv_match.group(2).strip()}"
+        else:
+            keyword = re.sub(r'\s*-\s*', ' ', keyword).strip()
+
         url = "https://api.subdl.com/api/v1/subtitles"
         params = {
             "api_key": self._subdl_api_key,
             "film_name": keyword,
-            "languages": "zh,zho,chi"
+            "languages": "zh"
         }
         res = self._http_get(url, params=params)
         if not res or res.status_code != 200:
