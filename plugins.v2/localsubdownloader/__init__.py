@@ -1140,23 +1140,25 @@ class LocalSubDownloader(_PluginBase):
                 
             norm_video = normalize_path(video_path)
             
-            # 使用时间戳防抖机制，完全避免前端由于 Vue 事件穿透/冒泡导致的 500ms 内重复事件提交
+            # 使用数据库级别的进程安全时间戳防抖，阻断一切多 Worker 进程并发重复处理的可能
             import time
             now = time.time()
-            if not hasattr(self, "_last_toggle_timestamps") or self._last_toggle_timestamps is None:
-                self._last_toggle_timestamps = {}
-                
-            last_time = self._last_toggle_timestamps.get(norm_video, 0)
-            if now - last_time < 0.5: # 500ms 内的极速重复请求直接忽略
-                logger.info(f"[LocalSubDownloader] 忽略 500ms 内的重复勾选切换请求: {Path(norm_video).name}")
-                return {"code": 0, "message": "忽略重复请求"}
-                
-            self._last_toggle_timestamps[norm_video] = now
             
-            if not hasattr(self, "_selected_videos_cache") or self._selected_videos_cache is None:
-                self._selected_videos_cache = []
+            # 从数据库中读取全局共享的最后一次切换时间字典
+            db_timestamps = self.get_data("selected_videos_toggle_timestamps") or {}
+            last_time = db_timestamps.get(norm_video, 0.0)
+            
+            if now - last_time < 1.0: # 1秒内的极速并发一律拦截并丢弃，秒杀所有并发 BUG！
+                logger.info(f"[LocalSubDownloader] 拦截多进程并发重复切换请求: {Path(norm_video).name} (间隔: {now - last_time:.3f}s)")
+                return {"code": 0, "message": "并发请求已拦截"}
                 
-            # 自动基于存在性进行状态切换，比依赖前端传来的 Checked 状态更具强壮性与原子性
+            # 立即更新并写入数据库，确保其他并发 Worker 进程秒级同步感知
+            db_timestamps[norm_video] = now
+            self.save_data("selected_videos_toggle_timestamps", db_timestamps)
+            
+            # 实时从数据库中读取最新的已勾选视频列表，杜绝内存缓存脏读
+            self._selected_videos_cache = self.get_data("selected_videos") or []
+            
             if norm_video in self._selected_videos_cache:
                 self._selected_videos_cache.remove(norm_video)
                 action_name = "取消"
