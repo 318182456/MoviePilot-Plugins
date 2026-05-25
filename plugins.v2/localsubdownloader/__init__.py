@@ -671,8 +671,7 @@ class LocalSubDownloader(_PluginBase):
                                     'events': {
                                         'click': {
                                             'api': 'plugin/LocalSubDownloader/run_selected',
-                                            'method': 'post',
-                                            'params': {'videos': '{{selected_videos}}'}
+                                            'method': 'post'
                                         }
                                     }
                                 }
@@ -1222,7 +1221,7 @@ class LocalSubDownloader(_PluginBase):
         try:
             body = await get_request_params(request)
             logger.info(f"[LocalSubDownloader] 接收到手动字幕整理请求，body: {body}")
-            videos = body.get("videos")
+            videos = body.get("videos") or body.get("selected_videos")
             
             video_list = []
             if videos and "{{selected_videos}}" not in str(videos):
