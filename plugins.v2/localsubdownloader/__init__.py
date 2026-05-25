@@ -1104,26 +1104,38 @@ class LocalSubDownloader(_PluginBase):
         try:
             body = await get_request_params(request)
             video_path = body.get("video_path")
-            checked = body.get("checked")
             
             if not video_path:
                 return {"code": 1, "message": "视频路径为空"}
                 
             norm_video = normalize_path(video_path)
-            is_checked = str(checked).lower() in ("true", "1")
+            
+            # 使用时间戳防抖机制，完全避免前端由于 Vue 事件穿透/冒泡导致的 500ms 内重复事件提交
+            import time
+            now = time.time()
+            if not hasattr(self, "_last_toggle_timestamps") or self._last_toggle_timestamps is None:
+                self._last_toggle_timestamps = {}
+                
+            last_time = self._last_toggle_timestamps.get(norm_video, 0)
+            if now - last_time < 0.5: # 500ms 内的极速重复请求直接忽略
+                logger.info(f"[LocalSubDownloader] 忽略 500ms 内的重复勾选切换请求: {Path(norm_video).name}")
+                return {"code": 0, "message": "忽略重复请求"}
+                
+            self._last_toggle_timestamps[norm_video] = now
             
             if not hasattr(self, "_selected_videos_cache") or self._selected_videos_cache is None:
                 self._selected_videos_cache = []
                 
-            if is_checked:
-                if norm_video not in self._selected_videos_cache:
-                    self._selected_videos_cache.append(norm_video)
+            # 自动基于存在性进行状态切换，比依赖前端传来的 Checked 状态更具强壮性与原子性
+            if norm_video in self._selected_videos_cache:
+                self._selected_videos_cache.remove(norm_video)
+                action_name = "取消"
             else:
-                if norm_video in self._selected_videos_cache:
-                    self._selected_videos_cache.remove(norm_video)
+                self._selected_videos_cache.append(norm_video)
+                action_name = "勾选"
                     
             self.save_data("selected_videos", self._selected_videos_cache)
-            logger.info(f"[LocalSubDownloader] 联动切换单个视频选择: {Path(norm_video).name} -> {'勾选' if is_checked else '取消'}")
+            logger.info(f"[LocalSubDownloader] 联动切换单个视频选择: {Path(norm_video).name} -> {action_name}")
             return {"code": 0, "message": "同步成功"}
         except Exception as e:
             return {"code": 1, "message": f"同步单个选择状态失败: {e}"}

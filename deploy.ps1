@@ -4,7 +4,7 @@ $ErrorActionPreference = "Stop"
 
 # 获取脚本所在的根目录
 $SourceDir = Join-Path $PSScriptRoot "plugins.v2\localsubdownloader"
-$DestDir = "\\sa6400\docker\moviepilot\config\local_plugins\localsubdownloader"
+$DestDir = "\\sa6400\docker\moviepilot\config\local_plugins\plugins.v2\localsubdownloader"
 
 Write-Host "=========================================" -ForegroundColor Cyan
 Write-Host "🚀 开始部署 LocalSubDownloader 插件到群晖 NAS..." -ForegroundColor Cyan
