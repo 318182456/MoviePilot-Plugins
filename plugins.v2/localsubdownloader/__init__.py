@@ -17,6 +17,15 @@ from app.schemas.types import EventType
 from fastapi import Request
 from app.core.plugin import PluginManager
 
+
+def normalize_path(p) -> str:
+    if not p:
+        return ""
+    p_str = str(Path(p).resolve()).replace("\\", "/")
+    if p_str.endswith("/") and len(p_str) > 1:
+        p_str = p_str[:-1]
+    return p_str
+
 class FakeResponse:
     def __init__(self, status_code: int, content: bytes, text: str = None):
         self.status_code = status_code
@@ -59,6 +68,23 @@ async def global_api_run_selected(request: Request) -> Any:
     instance = PluginManager()._running_plugins.get("LocalSubDownloader")
     if instance:
         return await instance.api_run_selected(request)
+    return {"code": 1, "message": "插件实例未加载"}
+
+
+async def global_api_save_selected(request: Request) -> Any:
+    instance = PluginManager()._running_plugins.get("LocalSubDownloader")
+    if instance:
+        return await instance.api_save_selected(request)
+    return {"code": 1, "message": "插件实例未加载"}
+
+
+async def global_api_toggle_video(request: Request) -> Any:
+    instance = PluginManager()._running_plugins.get("LocalSubDownloader")
+    if instance:
+        return await instance.api_toggle_video(request)
+    return {"code": 1, "message": "插件实例未加载"}
+
+
 async def get_request_params(request: Request) -> dict:
     """
     极具鲁棒性的参数提取辅助函数。
@@ -117,6 +143,7 @@ class LocalSubDownloader(_PluginBase):
     # 内存缓存，用于避免数据库写锁、延迟以及高频读写对前台实时渲染带来的性能与可见性影响
     _logs_cache = []
     _history_cache = []
+    _selected_videos_cache = []
 
     def init_plugin(self, config: dict = None):
         if config:
@@ -202,6 +229,22 @@ class LocalSubDownloader(_PluginBase):
                 "auth": "bear",
                 "summary": "为所选视频下载字幕",
                 "description": "后台异步为前台选中的视频文件下载字幕",
+            },
+            {
+                "path": "/save_selected",
+                "endpoint": global_api_save_selected,
+                "methods": ["POST", "GET"],
+                "auth": "bear",
+                "summary": "保存已勾选视频",
+                "description": "保存前台多选选中的视频路径列表",
+            },
+            {
+                "path": "/toggle_video",
+                "endpoint": global_api_toggle_video,
+                "methods": ["POST", "GET"],
+                "auth": "bear",
+                "summary": "切换视频的勾选状态",
+                "description": "前台勾选/取消勾选单个视频时触发后台缓存状态同步",
             }
         ]
 
@@ -373,7 +416,7 @@ class LocalSubDownloader(_PluginBase):
             if paths:
                 val = str(paths[0])
                 self.save_data("current_root_path", val)
-        return val or ""
+        return normalize_path(val)
 
     def get_current_dir_path(self) -> str:
         val = self.get_data("current_dir_path")
@@ -381,7 +424,7 @@ class LocalSubDownloader(_PluginBase):
             val = self.get_current_root_path()
             if val:
                 self.save_data("current_dir_path", val)
-        return val or ""
+        return normalize_path(val)
 
     def get_page(self) -> List[dict]:
         """
@@ -1000,6 +1043,7 @@ class LocalSubDownloader(_PluginBase):
                         break
 
             if root_path:
+                root_path = normalize_path(root_path)
                 self.save_data("current_root_path", root_path)
                 self.save_data("current_dir_path", root_path)
                 self.add_log(f"📌 手动整理根目录已切换为: {root_path}")
@@ -1021,13 +1065,14 @@ class LocalSubDownloader(_PluginBase):
             parent_path = path.parent
             root_path = self.get_current_root_path()
             
-            # 限制返回上一级时不能超出设定的根目录
-            if root_path and not str(parent_path).startswith(root_path):
+            norm_parent = normalize_path(parent_path)
+            norm_root = normalize_path(root_path)
+            if norm_root and not norm_parent.startswith(norm_root):
                 return {"code": 1, "message": "已到达当前所选根目录的最顶层，无法继续返回上一级"}
                 
-            self.save_data("current_dir_path", str(parent_path))
-            self.add_log(f"📁 已返回上一级目录: {parent_path}")
-            return {"code": 0, "message": f"已成功返回上一级: {parent_path}"}
+            self.save_data("current_dir_path", norm_parent)
+            self.add_log(f"📁 已返回上一级目录: {norm_parent}")
+            return {"code": 0, "message": f"已成功返回上一级: {norm_parent}"}
         except Exception as e:
             return {"code": 1, "message": f"返回上一级失败: {e}"}
 
@@ -1052,12 +1097,72 @@ class LocalSubDownloader(_PluginBase):
                 
             next_path = Path(current_dir) / dir_name
             if next_path.exists() and next_path.is_dir():
-                self.save_data("current_dir_path", str(next_path))
+                norm_next = normalize_path(next_path)
+                self.save_data("current_dir_path", norm_next)
                 self.add_log(f"📁 已进入子目录: {dir_name}")
                 return {"code": 0, "message": f"已成功进入目录: {dir_name}"}
             return {"code": 1, "message": "目标文件夹不存在或不是目录"}
         except Exception as e:
             return {"code": 1, "message": f"进入子目录失败: {e}"}
+
+    async def api_save_selected(self, request: Request) -> Any:
+        """
+        前台 POST 请求调用的端点：实时批量保存勾选的视频路径列表
+        """
+        try:
+            body = await get_request_params(request)
+            selected = body.get("selected")
+            
+            selected_list = []
+            if isinstance(selected, list):
+                selected_list = selected
+            elif isinstance(selected, str):
+                if selected.startswith("[") and selected.endswith("]"):
+                    try:
+                        selected_list = json.loads(selected)
+                    except Exception:
+                        selected_list = [normalize_path(v.strip()) for v in selected.split(",") if v.strip()]
+                else:
+                    selected_list = [normalize_path(v.strip()) for v in selected.split(",") if v.strip()]
+            else:
+                selected_list = []
+
+            # 统一做 normalize_path 规整化
+            self._selected_videos_cache = [normalize_path(p) for p in selected_list if p]
+            logger.info(f"[LocalSubDownloader] 联动保存视频多选缓存: 已选择 {len(self._selected_videos_cache)} 个视频")
+            return {"code": 0, "message": "已成功同步多选状态"}
+        except Exception as e:
+            return {"code": 1, "message": f"同步多选状态失败: {e}"}
+
+    async def api_toggle_video(self, request: Request) -> Any:
+        """
+        前台 POST 请求调用的端点：单个视频 checkbox 勾选联动缓存
+        """
+        try:
+            body = await get_request_params(request)
+            video_path = body.get("video_path")
+            checked = body.get("checked")
+            
+            if not video_path:
+                return {"code": 1, "message": "视频路径为空"}
+                
+            norm_video = normalize_path(video_path)
+            is_checked = str(checked).lower() in ("true", "1")
+            
+            if not hasattr(self, "_selected_videos_cache") or self._selected_videos_cache is None:
+                self._selected_videos_cache = []
+                
+            if is_checked:
+                if norm_video not in self._selected_videos_cache:
+                    self._selected_videos_cache.append(norm_video)
+            else:
+                if norm_video in self._selected_videos_cache:
+                    self._selected_videos_cache.remove(norm_video)
+                    
+            logger.info(f"[LocalSubDownloader] 联动切换单个视频选择: {Path(norm_video).name} -> {'勾选' if is_checked else '取消'}")
+            return {"code": 0, "message": "同步成功"}
+        except Exception as e:
+            return {"code": 1, "message": f"同步单个选择状态失败: {e}"}
 
     async def api_run_selected(self, request: Request) -> Any:
         """
@@ -1066,23 +1171,29 @@ class LocalSubDownloader(_PluginBase):
         try:
             body = await get_request_params(request)
             videos = body.get("videos")
-            if not videos:
-                return {"code": 1, "message": "请先勾选需要下载字幕的视频文件！"}
-                
+            
             video_list = []
-            if isinstance(videos, list):
-                video_list = videos
-            elif isinstance(videos, str):
-                if videos.startswith("[") and videos.endswith("]"):
-                    try:
-                        video_list = json.loads(videos)
-                    except Exception:
+            if videos and "{{selected_videos}}" not in str(videos):
+                if isinstance(videos, list):
+                    video_list = videos
+                elif isinstance(videos, str):
+                    if videos.startswith("[") and videos.endswith("]"):
+                        try:
+                            video_list = json.loads(videos)
+                        except Exception:
+                            video_list = [v.strip() for v in videos.split(",") if v.strip()]
+                    else:
                         video_list = [v.strip() for v in videos.split(",") if v.strip()]
-                else:
-                    video_list = [v.strip() for v in videos.split(",") if v.strip()]
-                    
+
+            # 智能过滤和转换
+            video_list = [normalize_path(p) for p in video_list if p and "{{selected_videos}}" not in str(p)]
+
+            # 自动兜底读取事件联动勾选缓存
             if not video_list:
-                return {"code": 1, "message": "未能解析出有效的视频文件路径"}
+                video_list = getattr(self, "_selected_videos_cache", [])
+
+            if not video_list:
+                return {"code": 1, "message": "请先勾选需要下载字幕的视频文件！"}
                 
             # 开启异步后台线程下载，规避超时
             thread = threading.Thread(target=self._process_selected_videos, args=(video_list,))
