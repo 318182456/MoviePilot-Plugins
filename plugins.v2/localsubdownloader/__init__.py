@@ -589,12 +589,18 @@ class LocalSubDownloader(_PluginBase):
                                         {
                                             'component': 'VSwitch',
                                             'props': {
-                                                'model': 'selected_videos',
-                                                'value': v_path_str,
+                                                'model-value': is_selected,
                                                 'color': 'success',
                                                 'density': 'compact',
                                                 'hide-details': True,
                                                 'class': 'ma-0 pa-0 mr-2'
+                                            },
+                                            'events': {
+                                                'change': {
+                                                    'api': 'plugin/LocalSubDownloader/toggle_video',
+                                                    'method': 'post',
+                                                    'params': {'video_path': v_path_str}
+                                                }
                                             }
                                         }
                                     ]
@@ -1226,7 +1232,7 @@ class LocalSubDownloader(_PluginBase):
                     
             self.save_data("selected_videos", self._selected_videos_cache)
             logger.info(f"[LocalSubDownloader] 联动切换单个视频选择: {Path(norm_video).name} -> {action_name}")
-            return {"code": 0}
+            return {"code": 1, "message": ""}
         except Exception as e:
             return {"code": 1, "message": f"同步单个选择状态失败: {e}"}
 
