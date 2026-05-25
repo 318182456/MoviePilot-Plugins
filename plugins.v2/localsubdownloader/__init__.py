@@ -630,8 +630,7 @@ class LocalSubDownloader(_PluginBase):
                                     'events': {
                                         'click': {
                                             'api': 'plugin/LocalSubDownloader/run_selected',
-                                            'method': 'post',
-                                            'params': {'videos': '{{selected_videos}}'}
+                                            'method': 'post'
                                         }
                                     }
                                 }
@@ -786,6 +785,13 @@ class LocalSubDownloader(_PluginBase):
                                     'prepend-inner-icon': 'mdi-movie-open',
                                     'class': 'mt-1 mb-1',
                                     'hide-details': True
+                                },
+                                'events': {
+                                    'change': {
+                                        'api': 'plugin/LocalSubDownloader/save_selected',
+                                        'method': 'post',
+                                        'params': {'selected': '{{selected_videos}}'}
+                                    }
                                 }
                             },
                             *video_action_component
@@ -1178,9 +1184,9 @@ class LocalSubDownloader(_PluginBase):
             # 智能过滤和转换
             video_list = [normalize_path(p) for p in video_list if p and "{{selected_videos}}" not in str(p)]
 
-            # 自动兜底读取事件联动勾选缓存
+            # 自动兜底读取事件联动勾选缓存，强力从数据库载入以防跨进程/跨页面数据滞后
             if not video_list:
-                video_list = getattr(self, "_selected_videos_cache", [])
+                video_list = self.get_data("selected_videos") or getattr(self, "_selected_videos_cache", [])
 
             logger.info(f"[LocalSubDownloader] 待下载字幕的视频文件列表: {video_list}")
 
