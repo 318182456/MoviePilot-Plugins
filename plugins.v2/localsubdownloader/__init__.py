@@ -1144,7 +1144,7 @@ class LocalSubDownloader(_PluginBase):
             self._selected_videos_cache = [normalize_path(p) for p in selected_list if p]
             self.save_data("selected_videos", self._selected_videos_cache)
             logger.info(f"[LocalSubDownloader] 联动保存视频多选缓存: 已选择 {len(self._selected_videos_cache)} 个视频")
-            return {"code": 0, "message": "已成功同步多选状态"}
+            return {"code": 0}
         except Exception as e:
             return {"code": 1, "message": f"同步多选状态失败: {e}"}
 
@@ -1189,7 +1189,7 @@ class LocalSubDownloader(_PluginBase):
                     
             self.save_data("selected_videos", self._selected_videos_cache)
             logger.info(f"[LocalSubDownloader] 联动切换单个视频选择: {Path(norm_video).name} -> {action_name}")
-            return {"code": 0, "message": "同步成功"}
+            return {"code": 0}
         except Exception as e:
             return {"code": 1, "message": f"同步单个选择状态失败: {e}"}
 
