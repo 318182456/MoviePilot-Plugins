@@ -253,6 +253,39 @@ class LocalSubDownloader(_PluginBase):
             pass
         return subs
 
+    def format_embedded_subs(self, subs: List[str]) -> str:
+        """
+        将庞大冗长的内置字幕语种列表（如 POL/CAT/FRE/JPN...）精简为清爽的中文/英文/其它展示。
+        """
+        if not subs:
+            return ""
+        
+        has_chinese = False
+        has_english = False
+        others_count = 0
+        
+        chinese_keywords = ["zh", "cn", "chi", "chs", "cht", "双语", "中文", "简", "繁", "国语"]
+        english_keywords = ["en", "eng", "english"]
+        
+        for sub in subs:
+            sub_lower = sub.lower()
+            if any(kw in sub_lower for kw in chinese_keywords):
+                has_chinese = True
+            elif any(kw in sub_lower for kw in english_keywords):
+                has_english = True
+            else:
+                others_count += 1
+                
+        res = []
+        if has_chinese:
+            res.append("中文")
+        if has_english:
+            res.append("英文")
+        if others_count > 0:
+            res.append(f"其它({others_count}种)")
+            
+        return "/".join(res)
+
     @staticmethod
     def get_command() -> List[Dict[str, Any]]:
         """
@@ -639,7 +672,9 @@ class LocalSubDownloader(_PluginBase):
                 if existing_subs:
                     sub_labels.append(f"外置: {'/'.join(set(existing_subs))}")
                 if embedded_subs:
-                    sub_labels.append(f"内置: {'/'.join(set(embedded_subs))}")
+                    formatted_emb = self.format_embedded_subs(embedded_subs)
+                    if formatted_emb:
+                        sub_labels.append(f"内置: {formatted_emb}")
                 
                 if sub_labels:
                     subtitle_info = f"✅ 已有 ({' | '.join(sub_labels)})"
