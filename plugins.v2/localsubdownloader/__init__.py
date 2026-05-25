@@ -589,12 +589,18 @@ class LocalSubDownloader(_PluginBase):
                                         {
                                             'component': 'VSwitch',
                                             'props': {
-                                                'model': 'selected_videos',
-                                                'value': v_path_str,
+                                                'model-value': is_selected,
                                                 'color': 'success',
                                                 'density': 'compact',
                                                 'hide-details': True,
                                                 'class': 'ma-0 pa-0 mr-2'
+                                            },
+                                            'events': {
+                                                'change': {
+                                                    'api': 'plugin/LocalSubDownloader/toggle_video',
+                                                    'method': 'post',
+                                                    'params': {'video_path': v_path_str}
+                                                }
                                             }
                                         }
                                     ]
