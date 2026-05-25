@@ -2104,6 +2104,10 @@ class LocalSubDownloader(_PluginBase):
             for sub in subs:
                 filename = sub.get("filename", "")
                 score = self.score_subtitle(filename, video_path.name)
+                # 智能降权被用户标记为机翻 (vote_machine_translate) 的字幕
+                if sub.get("vote_machine_translate") or int(sub.get("vote_machine_translate", 0)) > 0:
+                    score -= 50
+                    self.add_log(f"⚠️ [ASSRT] 检测到字幕已标记为机器翻译，强行剔除/扣减评分权重: {filename}")
                 scored_subs.append((score, sub))
 
             scored_subs.sort(key=lambda x: x[0], reverse=True)
@@ -2142,16 +2146,33 @@ class LocalSubDownloader(_PluginBase):
                     self.add_log(f"🌐 [ASSRT] Detail接口状态异常: status={data.get('status')}, msg={data.get('msg', '')}")
                     continue
 
-                # 正确路径: sub.subs[0].url (参照 ChineseSubFinder OneSubDetail 结构体)
+                # 优先提取 On-the-fly 单字幕免解压通道，极致节省群晖环境压缩包操作消耗
                 sub_subs = data.get("sub", {}).get("subs", [])
                 if not sub_subs:
                     self.add_log(f"🌐 [ASSRT] Detail接口返回 subs 为空 (id={sub_id})")
                     continue
 
-                url = sub_subs[0].get("url") if isinstance(sub_subs, list) else None
-                if not url:
-                    self.add_log(f"🌐 [ASSRT] Detail接口 subs[0].url 为空 (id={sub_id}), keys={list(sub_subs[0].keys()) if sub_subs else []}")
-                    continue
+                filelist = sub_subs[0].get("filelist") if isinstance(sub_subs, list) and sub_subs else []
+                best_file = None
+                if filelist:
+                    best_score = -9999
+                    for f_item in filelist:
+                        f_name = f_item.get("f", "")
+                        if Path(f_name).suffix.lower() in {'.srt', '.ass', '.vtt'}:
+                            score = self.score_subtitle(f_name, video_path.name)
+                            if score > best_score:
+                                best_score = score
+                                best_file = f_item
+
+                if best_file:
+                    url = best_file.get("url")
+                    filename = best_file.get("f")
+                    self.add_log(f"🚀 [ASSRT] 成功开启 On-the-fly 压缩包内单文件免解压极速直下: {filename}")
+                else:
+                    url = sub_subs[0].get("url") if isinstance(sub_subs, list) else None
+                    if not url:
+                        self.add_log(f"🌐 [ASSRT] Detail接口 subs[0].url 为空 (id={sub_id}), keys={list(sub_subs[0].keys()) if sub_subs else []}")
+                        continue
 
                 # ASSRT 文件服务器需要 Referer + UA 头，否则拒绝下载
                 assrt_dl_headers = {
