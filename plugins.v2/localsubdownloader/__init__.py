@@ -128,6 +128,10 @@ class LocalSubDownloader(_PluginBase):
             self._assrt_token = config.get("assrt_token", "").strip()
             self._subdl_enabled = config.get("subdl_enabled", False)
             self._subdl_api_key = config.get("subdl_api_key", "").strip()
+            try:
+                self._auto_download_delay = int(config.get("auto_download_delay", 30))
+            except Exception:
+                self._auto_download_delay = 30
 
         # 初始化加载持久化日志与历史到内存，确保双保险
         try:
@@ -231,6 +235,21 @@ class LocalSubDownloader(_PluginBase):
                                         'props': {
                                             'model': 'only_chinese',
                                             'label': '仅下载中文字幕',
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 4},
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'auto_download_delay',
+                                            'label': '自动拉取延迟时间 (秒)',
+                                            'type': 'number',
+                                            'hint': '转移入库完成后等待指定时间再匹配字幕。默认 30 秒。'
                                         }
                                     }
                                 ]
@@ -340,7 +359,8 @@ class LocalSubDownloader(_PluginBase):
             "assrt_enabled": False,
             "assrt_token": "",
             "subdl_enabled": False,
-            "subdl_api_key": ""
+            "subdl_api_key": "",
+            "auto_download_delay": 30
         }
 
     def get_state(self) -> bool:
@@ -408,6 +428,8 @@ class LocalSubDownloader(_PluginBase):
                     for item in c_path.iterdir():
                         if item.name.startswith('.'):
                             continue
+                        if item.name in ("@eaDir", "#recycle", "@tmp"):
+                            continue
                         if item.is_dir():
                             sub_dirs.append(item.name)
                         elif item.is_file() and item.suffix.lower() in video_extensions:
@@ -417,6 +439,83 @@ class LocalSubDownloader(_PluginBase):
 
             sub_dirs.sort()
             video_files.sort(key=lambda x: x.name)
+
+        # 1. 完整定义子目录按钮磁贴列表 (解决原本未定义 dir_buttons 引起的组件 NameError)
+        dir_buttons = []
+        for d in sub_dirs:
+            dir_buttons.append({
+                'component': 'VCol',
+                'props': {'cols': 6, 'md': 3, 'lg': 2},
+                'content': [
+                    {
+                        'component': 'VBtn',
+                        'text': f"📁 {d}",
+                        'props': {
+                            'variant': 'outlined',
+                            'block': True,
+                            'color': 'primary',
+                            'class': 'text-none text-truncate',
+                            'density': 'comfortable'
+                        },
+                        'events': {
+                            'click': {
+                                'api': 'plugin/LocalSubDownloader/go_into',
+                                'method': 'post',
+                                'params': {'dir_name': d}
+                            }
+                        }
+                    }
+                ]
+            })
+        
+        if not dir_buttons:
+            dir_buttons.append({
+                'component': 'VCol',
+                'props': {'cols': 12},
+                'content': [
+                    {
+                        'component': 'VListItem',
+                        'props': {
+                            'title': '（当前目录下无子文件夹）',
+                            'class': 'text-grey text-center py-2'
+                        }
+                    }
+                ]
+            })
+
+        # 2. 构造当前目录下视频文件与已存在字幕对照列表
+        video_display_items = []
+        if video_files:
+            for v in video_files:
+                existing_subs = []
+                for sub_file in v.parent.glob(f"{v.stem}*"):
+                    if sub_file.suffix.lower() in {'.srt', '.ass', '.vtt'}:
+                        existing_subs.append(sub_file.suffix[1:].upper())
+                
+                if existing_subs:
+                    sub_list_str = " / ".join(set(existing_subs))
+                    sub_info = f"✅ 已有外部字幕 ( {sub_list_str} )"
+                    subtitle_color = "success font-weight-bold"
+                else:
+                    sub_info = "❌ 暂无外部字幕"
+                    subtitle_color = "error font-weight-bold"
+                
+                video_display_items.append({
+                    'component': 'VListItem',
+                    'props': {
+                        'title': f"🎬 {v.name}",
+                        'subtitle': sub_info,
+                        'class': f"border-bottom text-{subtitle_color} py-2"
+                    }
+                })
+        else:
+            video_display_items.append({
+                'component': 'VListItem',
+                'props': {
+                    'title': "当前目录下未发现待整理的视频文件",
+                    'class': "text-grey text-center py-2"
+                }
+            })
 
         # 根目录下拉组件数据源
         root_items = [{"title": f"📂 {p}", "value": str(p)} for p in root_paths]
@@ -639,6 +738,24 @@ class LocalSubDownloader(_PluginBase):
                                     }
                                 ]
                             },
+                            # 3.5 🎬 当前目录音视频与已存字幕对照表
+                            {
+                                'component': 'VCard',
+                                'props': {
+                                    'title': '🎬 当前目录音视频与已存字幕对照表',
+                                    'variant': 'outlined',
+                                    'class': 'mb-4'
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VList',
+                                        'props': {
+                                            'density': 'comfortable'
+                                        },
+                                        'content': video_display_items
+                                    }
+                                ]
+                            },
                             # 4. 视频列表与字幕爬取执行
                             *video_action_component
                         ]
@@ -780,15 +897,53 @@ class LocalSubDownloader(_PluginBase):
         if not item_file_list:
             return
 
+        # 开启异步后台线程去进行延时等待与字幕检查下载，保证不阻塞事件分发线程
+        delay_seconds = getattr(self, "_auto_download_delay", 30)
+        thread = threading.Thread(target=self._async_delay_download, args=(item_file_list, delay_seconds))
+        thread.daemon = True
+        thread.start()
+
+    def _async_delay_download(self, file_list: List[str], delay_seconds: int):
+        """
+        异步后台处理线程：等待指定延迟时间，check是否已有中文字幕后进行匹配和下载
+        """
+        if delay_seconds > 0:
+            self.add_log(f"⏰ [自动拉取延迟] 视频已整理入库，等待延迟 {delay_seconds} 秒后开始进行中文字幕校核检测...")
+            import time
+            time.sleep(delay_seconds)
+
         video_extensions = {'.mp4', '.mkv', '.avi', '.ts', '.wmv', '.mov', '.flv', '.rmvb'}
-        for file_path_str in item_file_list:
+        
+        for file_path_str in file_list:
             file_path = Path(file_path_str)
             if file_path.suffix.lower() in video_extensions:
                 try:
-                    self.add_log(f"检测到视频整理入库，开始处理字幕: {file_path.name}")
+                    if not file_path.exists():
+                        continue
+
+                    # 1. 检查本地是否已经有中文字幕
+                    has_chinese_sub = False
+                    chinese_keywords = ["zh", "cn", "chi", "chs", "cht", "双语", "中文", "简", "繁", "国语"]
+                    
+                    # 搜索同名外部字幕
+                    for sub_file in file_path.parent.glob(f"{file_path.stem}*"):
+                        if sub_file.suffix.lower() in {'.srt', '.ass', '.vtt'}:
+                            sub_name = sub_file.name.lower()
+                            if any(kw in sub_name for kw in chinese_keywords):
+                                has_chinese_sub = True
+                                break
+                    
+                    # 2. 如果已有中文字幕，跳过并提示
+                    if has_chinese_sub:
+                        self.add_log(f"📥 [自动跳过] 整理入库延时结束，检测到本地已存在中文字幕，无需重复拉取: {file_path.name}")
+                        continue
+                    
+                    # 3. 否则，开始拉取字幕
+                    self.add_log(f"🚀 [自动拉取] 整理入库延时结束，未检测到本地中文字幕，开始匹配并拉取: {file_path.name}")
                     self.process_video(file_path)
+                    
                 except Exception as e:
-                    self.add_log(f"处理视频 {file_path.name} 失败: {e}")
+                    self.add_log(f"❌ 自动处理视频 {file_path.name} 失败: {e}")
 
     # ================= 手动整理/API/远程命令接口处理 =================
 
