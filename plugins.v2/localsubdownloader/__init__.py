@@ -611,17 +611,41 @@ class LocalSubDownloader(_PluginBase):
             video_action_component = [
                 {
                     'component': 'VRow',
-                    'props': {'class': 'mt-2 justify-end'},
+                    'props': {'class': 'mt-2 justify-end', 'dense': True},
                     'content': [
                         {
                             'component': 'VCol',
-                            'props': {'cols': 12, 'md': 5},
+                            'props': {'cols': 12, 'md': 6},
+                            'content': [
+                                {
+                                    'component': 'VBtn',
+                                    'text': '⚡ 整理所选视频',
+                                    'props': {
+                                        'color': 'primary',
+                                        'variant': 'elevated',
+                                        'block': True,
+                                        'size': 'default',
+                                        'prepend-icon': 'mdi-play-circle-outline'
+                                    },
+                                    'events': {
+                                        'click': {
+                                            'api': 'plugin/LocalSubDownloader/run_selected',
+                                            'method': 'post',
+                                            'params': {'videos': '{{selected_videos}}'}
+                                        }
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            'component': 'VCol',
+                            'props': {'cols': 12, 'md': 6},
                             'content': [
                                 {
                                     'component': 'VBtn',
                                     'text': '⚡ 整理当前目录全部视频',
                                     'props': {
-                                        'color': 'primary',
+                                        'color': 'secondary',
                                         'variant': 'outlined',
                                         'block': True,
                                         'size': 'default',
@@ -746,12 +770,12 @@ class LocalSubDownloader(_PluginBase):
                                 }]
                                 if sub_dirs else []
                             ),
-                            # 视频文件多选（关闭下拉自动触发下载）
+                            # 视频文件多选
                             {
                                 'component': 'VSelect',
                                 'props': {
                                     'model': 'selected_videos',
-                                    'label': f'选择视频 · 关闭下拉自动下载字幕（共 {len(video_files)} 个）',
+                                    'label': f'选择视频（共 {len(video_files)} 个）',
                                     'items': video_select_items,
                                     'multiple': True,
                                     'chips': True,
@@ -762,13 +786,6 @@ class LocalSubDownloader(_PluginBase):
                                     'prepend-inner-icon': 'mdi-movie-open',
                                     'class': 'mt-1 mb-1',
                                     'hide-details': True
-                                },
-                                'events': {
-                                    'change': {
-                                        'api': 'plugin/LocalSubDownloader/run_selected',
-                                        'method': 'post',
-                                        'params': {'videos': '{{selected_videos}}'}
-                                    }
                                 }
                             },
                             *video_action_component
