@@ -1957,6 +1957,7 @@ class LocalSubDownloader(_PluginBase):
 
         # 降级为关键字检索评分对齐
         import re
+        import urllib.parse
         keyword = video_path.stem
         tv_match = re.search(r'^(.+?)\s*-\s*(S\d+E\d+)', keyword, re.IGNORECASE)
         if tv_match:
