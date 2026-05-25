@@ -160,13 +160,15 @@ class LocalSubDownloader(_PluginBase):
             except Exception:
                 self._auto_download_delay = 30
 
-        # 初始化加载持久化日志与历史到内存，确保双保险
+        # 初始化加载持久化日志、历史与选定视频缓存到内存，确保双保险
         try:
             self._logs_cache = self.get_data("logs") or []
             self._history_cache = self.get_data("history") or []
+            self._selected_videos_cache = self.get_data("selected_videos") or []
         except Exception:
             self._logs_cache = []
             self._history_cache = []
+            self._selected_videos_cache = []
 
     @staticmethod
     def get_command() -> List[Dict[str, Any]]:
@@ -543,12 +545,28 @@ class LocalSubDownloader(_PluginBase):
                     sub_info = "❌ 暂无外部字幕"
                     subtitle_color = "error font-weight-bold"
                 
+                v_path_str = normalize_path(str(v))
+                is_checked = v_path_str in getattr(self, "_selected_videos_cache", [])
+                
                 video_display_items.append({
-                    'component': 'VListItem',
+                    'component': 'VCheckbox',
                     'props': {
-                        'title': f"🎬 {v.name}",
-                        'subtitle': sub_info,
-                        'class': f"border-bottom text-{subtitle_color} py-2"
+                        'label': f"🎬 {v.name} | {sub_info}",
+                        'modelValue': is_checked,
+                        'value': is_checked,
+                        'hide-details': True,
+                        'color': 'success' if existing_subs else 'primary',
+                        'class': f"px-4 border-bottom text-{subtitle_color} py-1"
+                    },
+                    'events': {
+                        'click': {
+                            'api': 'plugin/LocalSubDownloader/toggle_video',
+                            'method': 'post',
+                            'params': {
+                                'video_path': v_path_str,
+                                'checked': not is_checked
+                            }
+                        }
                     }
                 })
         else:
@@ -609,35 +627,14 @@ class LocalSubDownloader(_PluginBase):
         # 构造视频选择及执行部分
         video_action_component = []
         if video_files:
-            video_items = [{"title": f"🎬 {v.name}", "value": str(v)} for v in video_files]
             video_action_component = [
                 {
                     'component': 'VRow',
-                    'props': {'class': 'mt-2'},
+                    'props': {'class': 'mt-4 justify-end'},
                     'content': [
                         {
                             'component': 'VCol',
-                            'props': {'cols': 12, 'md': 9},
-                            'content': [
-                                {
-                                    'component': 'VAutocomplete',
-                                    'props': {
-                                        'model': 'selected_videos',
-                                        'label': '请勾选需要下载字幕的视频文件 (支持多选)',
-                                        'items': video_items,
-                                        'multiple': True,
-                                        'chips': True,
-                                        'closable-chips': True,
-                                        'clearable': True,
-                                        'variant': 'outlined',
-                                        'density': 'comfortable'
-                                    }
-                                }
-                            ]
-                        },
-                        {
-                            'component': 'VCol',
-                            'props': {'cols': 12, 'md': 3, 'class': 'd-flex align-center'},
+                            'props': {'cols': 12, 'md': 4},
                             'content': [
                                 {
                                     'component': 'VBtn',
@@ -651,8 +648,7 @@ class LocalSubDownloader(_PluginBase):
                                     'events': {
                                         'click': {
                                             'api': 'plugin/LocalSubDownloader/run_selected',
-                                            'method': 'post',
-                                            'params': {'videos': '{{selected_videos}}'}
+                                            'method': 'post'
                                         }
                                     }
                                 }
@@ -682,38 +678,6 @@ class LocalSubDownloader(_PluginBase):
                     {
                         'component': 'VCardText',
                         'content': [
-                            # 1. 根目录下拉检索与切换
-                            {
-                                'component': 'VRow',
-                                'props': {'class': 'mb-2'},
-                                'content': [
-                                    {
-                                        'component': 'VCol',
-                                        'props': {'cols': 12},
-                                        'content': [
-                                            {
-                                                'component': 'VAutocomplete',
-                                                'props': {
-                                                    'model': 'root_path',
-                                                    'value': current_root,
-                                                    'label': '📂 媒体整理根路径 (输入拼音/汉字可进行过滤搜索，选中即自动切换)',
-                                                    'items': root_items,
-                                                    'variant': 'outlined',
-                                                    'density': 'comfortable',
-                                                    'clearable': False
-                                                },
-                                                'events': {
-                                                    'change': {
-                                                        'api': 'plugin/LocalSubDownloader/change_root',
-                                                        'method': 'post',
-                                                        'params': {'root_path': '{{root_path}}'}
-                                                    }
-                                                }
-                                            }
-                                        ]
-                                    }
-                                ]
-                            },
                             # 2. 当前路径位置与导航面包屑
                             {
                                 'component': 'VRow',
@@ -1159,6 +1123,7 @@ class LocalSubDownloader(_PluginBase):
                 if norm_video in self._selected_videos_cache:
                     self._selected_videos_cache.remove(norm_video)
                     
+            self.save_data("selected_videos", self._selected_videos_cache)
             logger.info(f"[LocalSubDownloader] 联动切换单个视频选择: {Path(norm_video).name} -> {'勾选' if is_checked else '取消'}")
             return {"code": 0, "message": "同步成功"}
         except Exception as e:
@@ -1170,6 +1135,7 @@ class LocalSubDownloader(_PluginBase):
         """
         try:
             body = await get_request_params(request)
+            logger.info(f"[LocalSubDownloader] 接收到手动字幕整理请求，body: {body}")
             videos = body.get("videos")
             
             video_list = []
@@ -1192,13 +1158,21 @@ class LocalSubDownloader(_PluginBase):
             if not video_list:
                 video_list = getattr(self, "_selected_videos_cache", [])
 
+            logger.info(f"[LocalSubDownloader] 待下载字幕的视频文件列表: {video_list}")
+
             if not video_list:
+                logger.warning("[LocalSubDownloader] 字幕下载失败：未选择任何视频文件")
                 return {"code": 1, "message": "请先勾选需要下载字幕的视频文件！"}
                 
             # 开启异步后台线程下载，规避超时
             thread = threading.Thread(target=self._process_selected_videos, args=(video_list,))
             thread.daemon = True
             thread.start()
+            
+            # 成功开启字幕匹配线程后，清空已选缓存并完成持久化，使其在页面刷新后恢复未勾选状态
+            self._selected_videos_cache = []
+            self.save_data("selected_videos", [])
+            logger.info("[LocalSubDownloader] 手动整理字幕匹配线程已启动，已清空本地勾选缓存。")
             
             return {"code": 0, "message": f"已成功启动 {len(video_list)} 个视频的字幕下载任务，请在下方观察实时运行日志"}
         except Exception as e:
