@@ -589,18 +589,12 @@ class LocalSubDownloader(_PluginBase):
                                         {
                                             'component': 'VSwitch',
                                             'props': {
-                                                'model-value': is_selected,
+                                                'model': 'selected_videos',
+                                                'value': v_path_str,
                                                 'color': 'success',
                                                 'density': 'compact',
                                                 'hide-details': True,
                                                 'class': 'ma-0 pa-0 mr-2'
-                                            },
-                                            'events': {
-                                                'change': {
-                                                    'api': 'plugin/LocalSubDownloader/toggle_video',
-                                                    'method': 'post',
-                                                    'params': {'video_path': v_path_str}
-                                                }
                                             }
                                         }
                                     ]
@@ -751,118 +745,123 @@ class LocalSubDownloader(_PluginBase):
                     {
                         'component': 'VCardText',
                         'content': [
-                            # 额度提示信息（高颜值轻量化通告条）
-                            *(
-                                [{
-                                    'component': 'VAlert',
-                                    'props': {
-                                        'type': 'info',
-                                        'variant': 'tonal',
-                                        'density': 'compact',
-                                        'text': assrt_quota_text,
-                                        'class': 'mb-3'
-                                    }
-                                }]
-                                if assrt_quota_text else []
-                            ),
-                            # 当前路径 + 返回按钮
                             {
-                                'component': 'VRow',
-                            'props': {'class': 'mb-2 align-center', 'dense': True},
+                                'component': 'VForm',
                                 'content': [
-                                    {
-                                        'component': 'VCol',
-                                        'props': {'cols': 12, 'md': 9},
-                                        'content': [{
-                                            'component': 'VTextField',
+                                    # 额度提示信息（高颜值轻量化通告条）
+                                    *(
+                                        [{
+                                            'component': 'VAlert',
                                             'props': {
-                                                'model-value': current_dir or '未选择目录',
-                                                'readonly': True,
-                                                'variant': 'outlined',
-                                                'density': 'compact',
-                                                'prepend-inner-icon': 'mdi-folder-open',
-                                                'label': '当前目录',
-                                                'hide-details': True
-                                            }
-                                        }]
-                                    },
-                                    {
-                                        'component': 'VCol',
-                                        'props': {'cols': 12, 'md': 3},
-                                        'content': [{
-                                            'component': 'VBtn',
-                                            'text': '↑ 返回上一级',
-                                            'props': {
+                                                'type': 'info',
                                                 'variant': 'tonal',
-                                                'color': 'secondary',
-                                                'block': True,
-                                                'prepend-icon': 'mdi-arrow-up-bold',
-                                                'disabled': not current_dir or normalize_path(str(Path(current_dir).parent)) == normalize_path(current_dir)
-                                            },
-                                            'events': {
-                                                'click': {
-                                                    'api': 'plugin/LocalSubDownloader/go_up',
-                                                    'method': 'post'
-                                                }
+                                                'density': 'compact',
+                                                'text': assrt_quota_text,
+                                                'class': 'mb-3'
                                             }
                                         }]
-                                    }
-                                ]
-                            },
-                            # 子目录磁贴按钮（硬编码 params，稳定可靠）
-                            *(
-                                [{
-                                    'component': 'VRow',
-                                    'props': {'dense': True, 'class': 'mb-2', 'style': 'max-height:120px;overflow-y:auto;'},
-                                    'content': [
-                                        {
-                                            'component': 'VCol',
-                                            'props': {'cols': 6, 'md': 4, 'lg': 3},
-                                            'content': [{
-                                                'component': 'VBtn',
-                                                'text': f'📁 {d}',
-                                                'props': {
-                                                    'variant': 'tonal',
-                                                    'block': True,
-                                                    'color': 'primary',
-                                                    'class': 'text-none text-truncate',
-                                                    'density': 'comfortable',
-                                                    'size': 'small'
-                                                },
-                                                'events': {
-                                                    'click': {
-                                                        'api': 'plugin/LocalSubDownloader/go_into',
-                                                        'method': 'post',
-                                                        'params': {'dir_name': d}
+                                        if assrt_quota_text else []
+                                    ),
+                                    # 当前路径 + 返回按钮
+                                    {
+                                        'component': 'VRow',
+                                    'props': {'class': 'mb-2 align-center', 'dense': True},
+                                        'content': [
+                                            {
+                                                'component': 'VCol',
+                                                'props': {'cols': 12, 'md': 9},
+                                                'content': [{
+                                                    'component': 'VTextField',
+                                                    'props': {
+                                                        'model-value': current_dir or '未选择目录',
+                                                        'readonly': True,
+                                                        'variant': 'outlined',
+                                                        'density': 'compact',
+                                                        'prepend-inner-icon': 'mdi-folder-open',
+                                                        'label': '当前目录',
+                                                        'hide-details': True
                                                     }
-                                                }
-                                            }]
-                                        }
-                                        for d in sub_dirs
-                                    ]
-                                }]
-                                if sub_dirs else []
-                            ),
-                            # 视频选择区域（不用下拉，改为区域显示）
-                            *(
-                                [{
-                                    'component': 'VCard',
-                                    'props': {
-                                        'variant': 'flat',
-                                        'class': 'border rounded-lg mb-2',
-                                        'style': 'max-height: 250px; overflow-y: auto;'
+                                                }]
+                                            },
+                                            {
+                                                'component': 'VCol',
+                                                'props': {'cols': 12, 'md': 3},
+                                                'content': [{
+                                                    'component': 'VBtn',
+                                                    'text': '↑ 返回上一级',
+                                                    'props': {
+                                                        'variant': 'tonal',
+                                                        'color': 'secondary',
+                                                        'block': True,
+                                                        'prepend-icon': 'mdi-arrow-up-bold',
+                                                        'disabled': not current_dir or normalize_path(str(Path(current_dir).parent)) == normalize_path(current_dir)
+                                                    },
+                                                    'events': {
+                                                        'click': {
+                                                            'api': 'plugin/LocalSubDownloader/go_up',
+                                                            'method': 'post'
+                                                        }
+                                                    }
+                                                }]
+                                            }
+                                        ]
                                     },
-                                    'content': [
-                                        {
-                                            'component': 'VList',
-                                            'props': {'density': 'compact', 'class': 'py-0'},
-                                            'content': video_items
-                                        }
-                                    ]
-                                }]
-                                if video_files else []
-                            ),
-                            *video_action_component
+                                    # 子目录磁贴按钮（硬编码 params，稳定可靠）
+                                    *(
+                                        [{
+                                            'component': 'VRow',
+                                            'props': {'dense': True, 'class': 'mb-2', 'style': 'max-height:120px;overflow-y:auto;'},
+                                            'content': [
+                                                {
+                                                    'component': 'VCol',
+                                                    'props': {'cols': 6, 'md': 4, 'lg': 3},
+                                                    'content': [{
+                                                        'component': 'VBtn',
+                                                        'text': f'📁 {d}',
+                                                        'props': {
+                                                            'variant': 'tonal',
+                                                            'block': True,
+                                                            'color': 'primary',
+                                                            'class': 'text-none text-truncate',
+                                                            'density': 'comfortable',
+                                                            'size': 'small'
+                                                        },
+                                                        'events': {
+                                                            'click': {
+                                                                'api': 'plugin/LocalSubDownloader/go_into',
+                                                                'method': 'post',
+                                                                'params': {'dir_name': d}
+                                                            }
+                                                        }
+                                                    }]
+                                                }
+                                                for d in sub_dirs
+                                            ]
+                                        }]
+                                        if sub_dirs else []
+                                    ),
+                                    # 视频选择区域（不用下拉，改为区域显示）
+                                    *(
+                                        [{
+                                            'component': 'VCard',
+                                            'props': {
+                                                'variant': 'flat',
+                                                'class': 'border rounded-lg mb-2',
+                                                'style': 'max-height: 250px; overflow-y: auto;'
+                                            },
+                                            'content': [
+                                                {
+                                                    'component': 'VList',
+                                                    'props': {'density': 'compact', 'class': 'py-0'},
+                                                    'content': video_items
+                                                }
+                                            ]
+                                        }]
+                                        if video_files else []
+                                    ),
+                                    *video_action_component
+                                ]
+                            }
                         ]
                     }
                 ]
