@@ -177,6 +177,46 @@ class LocalSubDownloader(_PluginBase):
             self._history_cache = []
             self._selected_videos_cache = []
 
+    def get_embedded_subtitles(self, video_path: Path) -> List[str]:
+        """
+        检查视频文件是否含有内置/内挂字幕轨道，返回检测到的轨道语言/格式列表。
+        """
+        import subprocess
+        import json
+        
+        cmd = [
+            "ffprobe",
+            "-v", "error",
+            "-select_streams", "s",
+            "-show_entries", "stream=index,codec_name:stream_tags=language,title",
+            "-of", "json",
+            str(video_path)
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True, encoding='utf-8', errors='ignore')
+            data = json.loads(result.stdout)
+            streams = data.get("streams", [])
+            
+            subs = []
+            for stream in streams:
+                tags = stream.get("tags", {})
+                lang = tags.get("language") or tags.get("Language")
+                title = tags.get("title") or tags.get("Title")
+                codec = stream.get("codec_name", "SUB")
+                
+                label = ""
+                if lang:
+                    label += lang.upper()
+                if title:
+                    label += f"({title})" if label else title
+                if not label:
+                    label = codec.upper()
+                
+                subs.append(label)
+            return subs
+        except Exception:
+            return []
+
     @staticmethod
     def get_command() -> List[Dict[str, Any]]:
         """
@@ -553,12 +593,20 @@ class LocalSubDownloader(_PluginBase):
                     if sub_file.suffix.lower() in {'.srt', '.ass', '.vtt'}:
                         existing_subs.append(sub_file.suffix[1:].upper())
                 
+                # 检测内置/内挂字幕
+                embedded_subs = self.get_embedded_subtitles(v)
+                
                 v_path_str = normalize_path(str(v))
                 is_selected = v_path_str in selected_videos
                 
+                sub_labels = []
                 if existing_subs:
-                    sub_list_str = " / ".join(set(existing_subs))
-                    subtitle_info = f"✅ 已有 ({sub_list_str})"
+                    sub_labels.append(f"外置: {'/'.join(set(existing_subs))}")
+                if embedded_subs:
+                    sub_labels.append(f"内置: {'/'.join(set(embedded_subs))}")
+                
+                if sub_labels:
+                    subtitle_info = f"✅ 已有 ({' | '.join(sub_labels)})"
                 else:
                     subtitle_info = "❌ 无字幕"
                 
@@ -1004,10 +1052,19 @@ class LocalSubDownloader(_PluginBase):
                             if any(kw in sub_name for kw in chinese_keywords):
                                 has_chinese_sub = True
                                 break
+                                
+                    # 检查内置/内挂字幕是否包含中文
+                    if not has_chinese_sub:
+                        embedded_subs = self.get_embedded_subtitles(file_path)
+                        for emb in embedded_subs:
+                            emb_lower = emb.lower()
+                            if any(kw in emb_lower for kw in chinese_keywords):
+                                has_chinese_sub = True
+                                break
                     
                     # 2. 如果已有中文字幕，跳过并提示
                     if has_chinese_sub:
-                        self.add_log(f"📥 [自动跳过] 整理入库延时结束，检测到本地已存在中文字幕，无需重复拉取: {file_path.name}")
+                        self.add_log(f"📥 [自动跳过] 整理入库延时结束，检测到本地已存在中文字幕（包含内置），无需重复拉取: {file_path.name}")
                         continue
                     
                     # 3. 否则，开始拉取字幕
@@ -1256,7 +1313,7 @@ class LocalSubDownloader(_PluginBase):
             self.save_data("selected_videos", [])
             logger.info("[LocalSubDownloader] 手动整理字幕匹配线程已启动，已清空本地勾选缓存。")
             
-            return {"code": 0, "message": f"已成功启动 {len(video_list)} 个视频的字幕下载任务，请在下方观察实时运行日志"}
+            return {"code": 0, "message": f"已成功启动 {len(video_list)} 个视频的字幕下载任务"}
         except Exception as e:
             return {"code": 1, "message": f"启动批量字幕下载失败: {e}"}
 
@@ -1288,7 +1345,7 @@ class LocalSubDownloader(_PluginBase):
             thread.daemon = True
             thread.start()
 
-            return {"code": 0, "message": f"已启动当前目录全部 {len(video_list)} 个视频的字幕下载任务，请在下方观察实时运行日志"}
+            return {"code": 0, "message": f"已启动当前目录全部 {len(video_list)} 个视频的字幕下载任务"}
         except Exception as e:
             return {"code": 1, "message": f"启动失败: {e}"}
 
@@ -1603,7 +1660,7 @@ class LocalSubDownloader(_PluginBase):
 
         self.add_log(f"🔍 开始处理: {video_path.name}")
 
-        # 1. 收集本地已有字幕 MD5 用于去重
+        # 1. 收集本地已有字幕 MD5 用于去重与内置字幕日志展示
         existing_md5s = set()
         existing_sub_names = []
         for sub_file in video_path.parent.glob(f"{video_path.stem}*"):
@@ -1616,10 +1673,18 @@ class LocalSubDownloader(_PluginBase):
                 except Exception:
                     pass
 
-        if existing_sub_names:
-            self.add_log(f"📂 检测到本地已有字幕: {', '.join(existing_sub_names)}")
+        # 检测内置/内挂字幕
+        embedded_subs = self.get_embedded_subtitles(video_path)
+
+        if existing_sub_names or embedded_subs:
+            log_msg = "📂 检测到已有字幕："
+            if existing_sub_names:
+                log_msg += f" [外置] {', '.join(existing_sub_names)}"
+            if embedded_subs:
+                log_msg += f" [内置] {', '.join(embedded_subs)}"
+            self.add_log(log_msg)
         else:
-            self.add_log(f"📂 本地无字幕文件，将尝试全部来源下载")
+            self.add_log(f"📂 本地无字幕文件（包含内置），将尝试全部来源下载")
 
         # 2. 精准匹配轨道 (Hash-based)
         precision_success = False
