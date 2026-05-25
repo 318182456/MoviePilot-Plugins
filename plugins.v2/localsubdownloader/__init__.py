@@ -99,6 +99,13 @@ async def global_api_change_sort(request: Request) -> Any:
     return {"code": 1, "message": "插件实例未加载"}
 
 
+async def global_api_change_filter(request: Request) -> Any:
+    instance = PluginManager()._running_plugins.get("LocalSubDownloader")
+    if instance:
+        return await instance.api_change_filter(request)
+    return {"code": 1, "message": "插件实例未加载"}
+
+
 async def get_request_params(request: Request) -> dict:
     """
     极具鲁棒性的参数提取辅助函数。
@@ -386,6 +393,14 @@ class LocalSubDownloader(_PluginBase):
                 "auth": "bear",
                 "summary": "切换排序方式",
                 "description": "切换当前手动字幕整理目录下的排序方式",
+            },
+            {
+                "path": "/change_filter",
+                "endpoint": global_api_change_filter,
+                "methods": ["POST", "GET"],
+                "auth": "bear",
+                "summary": "切换名称筛选",
+                "description": "切换当前手动字幕整理目录下的名称筛选关键字",
             }
         ]
 
@@ -599,6 +614,10 @@ class LocalSubDownloader(_PluginBase):
         self._selected_videos_cache = self.get_data("selected_videos") or []
 
         sort_by = self.get_data("sort_by") or "name"
+        name_filter = self.get_data("name_filter") or ""
+        if name_filter == "{{name_filter}}":
+            name_filter = ""
+        name_filter_lower = name_filter.lower().strip()
 
         # 扫描当前浏览目录下的子目录与视频文件
         sub_dirs = []
@@ -615,8 +634,12 @@ class LocalSubDownloader(_PluginBase):
                         if item.name in ("@eaDir", "#recycle", "@tmp"):
                             continue
                         if item.is_dir():
+                            if name_filter_lower and name_filter_lower not in item.name.lower():
+                                continue
                             sub_dirs.append(item.name)
                         elif item.is_file() and item.suffix.lower() in video_extensions:
+                            if name_filter_lower and name_filter_lower not in item.name.lower():
+                                continue
                             video_files.append(item)
                 except Exception as e:
                     logger.error(f"[LocalSubDownloader] 扫描目录 {current_dir} 失败: {e}")
@@ -953,7 +976,7 @@ class LocalSubDownloader(_PluginBase):
                                             }
                                         ]
                                     },
-                                    # 排序控制行
+                                    # 排序与筛选控制行
                                     {
                                         'component': 'VRow',
                                         'props': {'class': 'mb-2 align-center', 'dense': True},
@@ -985,7 +1008,38 @@ class LocalSubDownloader(_PluginBase):
                                                         }
                                                     }
                                                 ]
-                                            }
+                                            },
+                                             {
+                                                 'component': 'VCol',
+                                                 'props': {'cols': 12, 'md': 8},
+                                                 'content': [
+                                                     {
+                                                         'component': 'VTextField',
+                                                         'props': {
+                                                             'model': 'name_filter',
+                                                             'label': f'🔍 名称筛选 (当前: {name_filter})' if name_filter else '🔍 名称筛选',
+                                                             'placeholder': '输入关键字并回车进行过滤',
+                                                             'variant': 'outlined',
+                                                             'density': 'compact',
+                                                             'clearable': True,
+                                                             'hide-details': True,
+                                                             'prepend-inner-icon': 'mdi-magnify'
+                                                         },
+                                                         'events': {
+                                                             'change': {
+                                                                 'api': 'plugin/LocalSubDownloader/change_filter',
+                                                                 'method': 'post',
+                                                                 'params': {'name_filter': '{{name_filter}}'}
+                                                             },
+                                                             'click:clear': {
+                                                                 'api': 'plugin/LocalSubDownloader/change_filter',
+                                                                 'method': 'post',
+                                                                 'params': {'name_filter': ''}
+                                                             }
+                                                         }
+                                                     }
+                                                 ]
+                                             }
                                         ]
                                     },
                                     # 子目录磁贴按钮（硬编码 params，稳定可靠）
@@ -1288,7 +1342,8 @@ class LocalSubDownloader(_PluginBase):
                 # 切换路径自动清空勾选缓存，避免旧路径选中遗留
                 self.save_data("selected_videos", [])
                 self._selected_videos_cache = []
-                self.add_log(f"📌 手动整理根目录已切换为: {root_path} (已清空旧路径勾选缓存)")
+                self.save_data("name_filter", "")
+                self.add_log(f"📌 手动整理根目录已切换为: {root_path} (已清空旧路径勾选与名称筛选缓存)")
                 return {"code": 0, "message": f"根目录已成功切换为: {root_path}"}
             return {"code": 1, "message": "切换根目录失败：接收到的路径为空"}
         except Exception as e:
@@ -1315,7 +1370,8 @@ class LocalSubDownloader(_PluginBase):
             # 切换路径自动清空勾选缓存，避免旧路径选中遗留
             self.save_data("selected_videos", [])
             self._selected_videos_cache = []
-            self.add_log(f"📁 已返回上一级目录: {norm_parent} (已清空旧路径勾选缓存)")
+            self.save_data("name_filter", "")
+            self.add_log(f"📁 已返回上一级目录: {norm_parent} (已清空旧路径勾选与名称筛选缓存)")
             return {"code": 0, "message": f"已成功返回上一级: {norm_parent}"}
         except Exception as e:
             return {"code": 1, "message": f"返回上一级失败: {e}"}
@@ -1346,7 +1402,8 @@ class LocalSubDownloader(_PluginBase):
                 # 切换路径自动清空勾选缓存，避免旧路径选中遗留
                 self.save_data("selected_videos", [])
                 self._selected_videos_cache = []
-                self.add_log(f"📁 已进入子目录: {dir_name} (已清空旧路径勾选缓存)")
+                self.save_data("name_filter", "")
+                self.add_log(f"📁 已进入子目录: {dir_name} (已清空旧路径勾选与名称筛选缓存)")
                 return {"code": 0, "message": f"已成功进入目录: {dir_name}"}
             return {"code": 1, "message": "目标文件夹不存在或不是目录"}
         except Exception as e:
@@ -1525,6 +1582,20 @@ class LocalSubDownloader(_PluginBase):
             return {"code": 0, "message": f"排序方式已切换为: {'按修改时间' if sort_by == 'time' else '按名称'}"}
         except Exception as e:
             return {"code": 1, "message": f"切换排序失败: {e}"}
+
+    async def api_change_filter(self, request: Request) -> Any:
+        """
+        前台 POST 请求调用的端点：切换当前目录名称筛选关键字
+        """
+        try:
+            body = await get_request_params(request)
+            name_filter = body.get("name_filter") or ""
+            if name_filter == "{{name_filter}}":
+                name_filter = ""
+            self.save_data("name_filter", name_filter)
+            return {"code": 0, "message": "名称筛选已更新"}
+        except Exception as e:
+            return {"code": 1, "message": f"切换筛选失败: {e}"}
 
     def _process_selected_videos(self, video_paths: List[str]):
         """
