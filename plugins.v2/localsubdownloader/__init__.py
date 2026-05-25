@@ -460,6 +460,9 @@ class LocalSubDownloader(_PluginBase):
         root_paths = self.get_moviepilot_media_paths()
         current_root = self.get_current_root_path()
         current_dir = self.get_current_dir_path()
+        
+        # 实时从数据库加载最新已勾选的视频列表，确保多进程/多 Worker 下的状态渲染绝对一致，防范脏读
+        self._selected_videos_cache = self.get_data("selected_videos") or []
 
         # 扫描当前浏览目录下的子目录与视频文件
         sub_dirs = []
