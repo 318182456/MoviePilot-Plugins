@@ -553,51 +553,24 @@ class LocalSubDownloader(_PluginBase):
                 icon_color = "success" if is_checked else "grey"
                 
                 video_display_items.append({
-                    'component': 'VRow',
+                    'component': 'VCheckbox',
                     'props': {
-                        'align': 'center',
-                        'dense': True,
-                        'class': 'px-4 py-1 border-bottom'
+                        'label': f"🎬 {v.name} | {sub_info}",
+                        'modelValue': is_checked,
+                        'value': is_checked,
+                        'hide-details': True,
+                        'color': 'success' if existing_subs else 'primary',
+                        'class': f"px-4 border-bottom text-{subtitle_color} py-1"
                     },
-                    'content': [
-                        {
-                            'component': 'VCol',
-                            'props': {'cols': 'auto'},
-                            'content': [
-                                {
-                                    'component': 'VBtn',
-                                    'props': {
-                                        'icon': icon,
-                                        'variant': 'text',
-                                        'color': icon_color,
-                                        'density': 'comfortable'
-                                    },
-                                    'events': {
-                                        'click': {
-                                            'api': 'plugin/LocalSubDownloader/toggle_video',
-                                            'method': 'post',
-                                            'params': {
-                                                'video_path': v_path_str
-                                            }
-                                        }
-                                    }
-                                }
-                            ]
-                        },
-                        {
-                            'component': 'VCol',
-                            'content': [
-                                {
-                                    'component': 'VListItem',
-                                    'props': {
-                                        'title': f"🎬 {v.name}",
-                                        'subtitle': sub_info,
-                                        'class': f"text-{subtitle_color} pa-0"
-                                    }
-                                }
-                            ]
+                    'events': {
+                        'change': {
+                            'api': 'plugin/LocalSubDownloader/toggle_video',
+                            'method': 'post',
+                            'params': {
+                                'video_path': v_path_str
+                            }
                         }
-                    ]
+                    }
                 })
         else:
             video_display_items.append({
@@ -785,9 +758,9 @@ class LocalSubDownloader(_PluginBase):
                                 },
                                 'content': [
                                     {
-                                        'component': 'VCardText',
+                                        'component': 'VList',
                                         'props': {
-                                            'class': 'pa-0'
+                                            'density': 'comfortable'
                                         },
                                         'content': video_display_items
                                     }
