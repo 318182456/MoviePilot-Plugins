@@ -1091,7 +1091,10 @@ class LocalSubDownloader(_PluginBase):
         """
         try:
             body = await get_request_params(request)
+            logger.info(f"[LocalSubDownloader] api_save_selected 接收到 Body 原始数据: {body}")
             selected = body.get("selected")
+            if not selected or "{{selected_videos}}" in str(selected):
+                selected = body.get("value") or body.get("videos")
             
             selected_list = []
             if isinstance(selected, list):
