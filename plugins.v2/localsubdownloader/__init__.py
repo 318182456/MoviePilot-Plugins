@@ -17,6 +17,15 @@ from app.schemas.types import EventType
 from fastapi import Request
 from app.core.plugin import PluginManager
 
+class FakeResponse:
+    def __init__(self, status_code: int, content: bytes, text: str = None):
+        self.status_code = status_code
+        self.content = content
+        self.text = text if text is not None else (content.decode('utf-8', errors='ignore') if isinstance(content, bytes) else str(content))
+
+    def json(self) -> Any:
+        return json.loads(self.text)
+
 
 async def global_api_manual_run(request: Request) -> Any:
     instance = PluginManager()._running_plugins.get("LocalSubDownloader")
@@ -1350,6 +1359,12 @@ class LocalSubDownloader(_PluginBase):
         try:
             from app.utils.http import RequestUtils
             res = RequestUtils(headers=headers).post(url, data=data, json=json_data)
+            if res is None:
+                return None
+            if isinstance(res, str):
+                return FakeResponse(200, res.encode('utf-8', errors='ignore'), res)
+            if not hasattr(res, "status_code"):
+                return FakeResponse(200, str(res).encode('utf-8', errors='ignore'), str(res))
             return res
         except Exception:
             import urllib.request
@@ -1366,13 +1381,6 @@ class LocalSubDownloader(_PluginBase):
             req = urllib.request.Request(url, data=payload, headers=req_headers, method="POST")
             try:
                 with urllib.request.urlopen(req, timeout=15) as response:
-                    class FakeResponse:
-                        def __init__(self, code, content):
-                            self.status_code = code
-                            self.content = content
-                            self.text = content.decode('utf-8', errors='ignore')
-                        def json(self):
-                            return json.loads(self.text)
                     return FakeResponse(response.getcode(), response.read())
             except Exception as e:
                 logger.error(f"[LocalSubDownloader] POST 退化调用失败: {e}")
@@ -1382,6 +1390,12 @@ class LocalSubDownloader(_PluginBase):
         try:
             from app.utils.http import RequestUtils
             res = RequestUtils(headers=headers).get(url, params=params)
+            if res is None:
+                return None
+            if isinstance(res, str):
+                return FakeResponse(200, res.encode('utf-8', errors='ignore'), res)
+            if not hasattr(res, "status_code"):
+                return FakeResponse(200, str(res).encode('utf-8', errors='ignore'), str(res))
             return res
         except Exception:
             import urllib.request
@@ -1391,13 +1405,6 @@ class LocalSubDownloader(_PluginBase):
             req = urllib.request.Request(url, headers=headers or {}, method="GET")
             try:
                 with urllib.request.urlopen(req, timeout=15) as response:
-                    class FakeResponse:
-                        def __init__(self, code, content):
-                            self.status_code = code
-                            self.content = content
-                            self.text = content.decode('utf-8', errors='ignore')
-                        def json(self):
-                            return json.loads(self.text)
                     return FakeResponse(response.getcode(), response.read())
             except Exception as e:
                 logger.error(f"[LocalSubDownloader] GET 退化调用失败: {e}")
@@ -1505,6 +1512,14 @@ class LocalSubDownloader(_PluginBase):
         if not res or res.status_code != 200:
             return False
 
+        if not res.text or not res.text.strip() or res.text.strip() in ("-1", "[]", "null"):
+            return False
+
+        stripped_text = res.text.strip()
+        if not (stripped_text.startswith("[") or stripped_text.startswith("{")):
+            logger.debug(f"[LocalSubDownloader] 射手API返回了非JSON响应内容: {stripped_text[:100]}")
+            return False
+
         try:
             items = res.json()
             if not isinstance(items, list):
@@ -1533,13 +1548,21 @@ class LocalSubDownloader(_PluginBase):
                         )
             return success_any
         except Exception as e:
-            logger.error(f"[LocalSubDownloader] 解析射手API响应失败: {e}")
+            logger.debug(f"[LocalSubDownloader] 解析射手API响应失败: {e}")
             return False
 
     def download_from_xunlei(self, video_path: Path, cid: str, existing_md5s: set) -> bool:
         url = f"http://sub.xunlei.com/sub/api/subtitle?cid={cid}"
         res = self._http_get(url)
         if not res or res.status_code != 200:
+            return False
+
+        if not res.text or not res.text.strip():
+            return False
+
+        stripped_text = res.text.strip()
+        if not (stripped_text.startswith("[") or stripped_text.startswith("{")):
+            logger.debug(f"[LocalSubDownloader] 迅雷API返回了非JSON响应内容: {stripped_text[:100]}")
             return False
 
         try:
@@ -1579,7 +1602,7 @@ class LocalSubDownloader(_PluginBase):
                     )
             return success_any
         except Exception as e:
-            logger.error(f"[LocalSubDownloader] 解析迅雷API响应失败: {e}")
+            logger.debug(f"[LocalSubDownloader] 解析迅雷API响应失败: {e}")
             return False
 
     def download_from_assrt(self, video_path: Path, existing_md5s: set) -> bool:
@@ -1589,21 +1612,26 @@ class LocalSubDownloader(_PluginBase):
             url_hash = f"https://api.assrt.net/v1/sub/search?token={self._assrt_token}&filehash={shooter_hash}"
             res = self._http_get(url_hash)
             if res and res.status_code == 200:
-                try:
-                    data = res.json()
-                    if data.get("status") == 0:
-                        subs = data.get("sub", {}).get("subs", [])
-                        if subs:
-                            self.add_log(f"ASSRT (精准Hash) 匹配到可用字幕，开始下载...")
-                            return self._download_assrt_subs(video_path, subs[:2], existing_md5s)
-                except Exception:
-                    pass
+                if res.text and res.text.strip() and (res.text.strip().startswith("[") or res.text.strip().startswith("{")):
+                    try:
+                        data = res.json()
+                        if data.get("status") == 0:
+                            subs = data.get("sub", {}).get("subs", [])
+                            if subs:
+                                self.add_log(f"ASSRT (精准Hash) 匹配到可用字幕，开始下载...")
+                                return self._download_assrt_subs(video_path, subs[:2], existing_md5s)
+                    except Exception:
+                        pass
 
         # 降级为关键字检索评分对齐
         keyword = video_path.stem
         url_search = f"https://api.assrt.net/v1/sub/search?token={self._assrt_token}&q={keyword}&cnt=15"
         res = self._http_get(url_search)
         if not res or res.status_code != 200:
+            return False
+
+        if not res.text or not res.text.strip() or not (res.text.strip().startswith("[") or res.text.strip().startswith("{")):
+            logger.debug(f"[LocalSubDownloader] ASSRT关键字检索返回了非JSON响应内容")
             return False
 
         try:
@@ -1629,7 +1657,7 @@ class LocalSubDownloader(_PluginBase):
             self.add_log(f"ASSRT (智能特征打分轨) 匹配到 {len(top_subs)} 个字幕，开始下载...")
             return self._download_assrt_subs(video_path, top_subs, existing_md5s)
         except Exception as e:
-            logger.error(f"[LocalSubDownloader] 解析 ASSRT 响应失败: {e}")
+            logger.debug(f"[LocalSubDownloader] 解析 ASSRT 响应失败: {e}")
             return False
 
     def _download_assrt_subs(self, video_path: Path, subs: list, existing_md5s: set) -> bool:
@@ -1643,23 +1671,24 @@ class LocalSubDownloader(_PluginBase):
             detail_url = f"https://api.assrt.net/v1/sub/detail?token={self._assrt_token}&id={sub_id}"
             res = self._http_get(detail_url)
             if res and res.status_code == 200:
-                try:
-                    data = res.json()
-                    if data.get("status") == 0:
-                        detail = data.get("sub", {}).get("detail", {})
-                        url = detail.get("url")
-                        if url:
-                            dl_res = self._http_get(url)
-                            if dl_res and dl_res.status_code == 200:
-                                success_any |= self.save_subtitle_stream(
-                                    video_path=video_path,
-                                    filename=filename,
-                                    content=dl_res.content,
-                                    existing_md5s=existing_md5s,
-                                    source_label="ASSRT"
-                                )
-                except Exception:
-                    pass
+                if res.text and res.text.strip() and (res.text.strip().startswith("[") or res.text.strip().startswith("{")):
+                    try:
+                        data = res.json()
+                        if data.get("status") == 0:
+                            detail = data.get("sub", {}).get("detail", {})
+                            url = detail.get("url")
+                            if url:
+                                dl_res = self._http_get(url)
+                                if dl_res and dl_res.status_code == 200:
+                                    success_any |= self.save_subtitle_stream(
+                                        video_path=video_path,
+                                        filename=filename,
+                                        content=dl_res.content,
+                                        existing_md5s=existing_md5s,
+                                        source_label="ASSRT"
+                                    )
+                    except Exception:
+                        pass
         return success_any
 
     def download_from_subdl(self, video_path: Path, existing_md5s: set) -> bool:
@@ -1672,6 +1701,10 @@ class LocalSubDownloader(_PluginBase):
         }
         res = self._http_get(url, params=params)
         if not res or res.status_code != 200:
+            return False
+
+        if not res.text or not res.text.strip() or not (res.text.strip().startswith("[") or res.text.strip().startswith("{")):
+            logger.debug(f"[LocalSubDownloader] SubDL关键字检索返回了非JSON响应内容")
             return False
 
         try:
@@ -1710,5 +1743,5 @@ class LocalSubDownloader(_PluginBase):
                         )
             return success_any
         except Exception as e:
-            logger.error(f"[LocalSubDownloader] 解析 SubDL 响应错误: {e}")
+            logger.debug(f"[LocalSubDownloader] 解析 SubDL 响应错误: {e}")
             return False
