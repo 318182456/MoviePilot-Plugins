@@ -555,8 +555,8 @@ class LocalSubDownloader(_PluginBase):
                 ]
             })
 
-        # 2. 构造高颜值、超紧凑视频文件复选框列表（全部保存在浏览器本地 Vue State 中，点击时绝不请求 API！）
-        video_list_components = []
+        # 2. 构造 VSelect 下拉单行选项（完美支持多选与收起时单次触发）
+        video_select_items = []
         if video_files:
             for v in video_files:
                 existing_subs = []
@@ -565,40 +565,13 @@ class LocalSubDownloader(_PluginBase):
                         existing_subs.append(sub_file.suffix[1:].upper())
                 
                 v_path_str = normalize_path(str(v))
-                
                 if existing_subs:
                     sub_list_str = " / ".join(set(existing_subs))
-                    status_text = f"✅ 已有字幕 ({sub_list_str})"
+                    item_title = f"🎬 {v.name}  ·  ✅ 已有字幕 ({sub_list_str})"
                 else:
-                    status_text = "❌ 无字幕"
+                    item_title = f"🎬 {v.name}  ·  ❌ 无字幕"
                 
-                # 拼装成一行显示: 🎬 视频名   ·   已有字幕
-                label_html = f"🎬 {v.name}  ·  {status_text}"
-                
-                video_list_components.append({
-                    'component': 'VRow',
-                    'props': {'align': 'center', 'no-gutters': True, 'dense': True, 'class': 'py-1 border-bottom'},
-                    'content': [
-                        {
-                            'component': 'VCol',
-                            'props': {'cols': 12},
-                            'content': [
-                                {
-                                    'component': 'VCheckbox',
-                                    'props': {
-                                        'model': 'selected_videos',
-                                        'value': v_path_str,
-                                        'label': label_html,
-                                        'color': 'primary',
-                                        'density': 'compact',
-                                        'hide-details': True,
-                                        'class': 'ma-0 pa-0 text-truncate text-body-2'
-                                    }
-                                }
-                            ]
-                        }
-                    ]
-                })
+                video_select_items.append({"title": item_title, "value": v_path_str})
 
         # 根目录下拉组件数据源
         root_items = [{"title": f"📂 {p}", "value": str(p)} for p in root_paths]
@@ -656,36 +629,13 @@ class LocalSubDownloader(_PluginBase):
                     'content': [
                         {
                             'component': 'VCol',
-                            'props': {'cols': 12, 'md': 6},
-                            'content': [
-                                {
-                                    'component': 'VBtn',
-                                    'text': '⚡ 整理所选视频',
-                                    'props': {
-                                        'color': 'primary',
-                                        'variant': 'elevated',
-                                        'block': True,
-                                        'size': 'default',
-                                        'prepend-icon': 'mdi-play-circle-outline'
-                                    },
-                                    'events': {
-                                        'click': {
-                                            'api': 'plugin/LocalSubDownloader/run_selected',
-                                            'method': 'post'
-                                        }
-                                    }
-                                }
-                            ]
-                        },
-                        {
-                            'component': 'VCol',
-                            'props': {'cols': 12, 'md': 6},
+                            'props': {'cols': 12},
                             'content': [
                                 {
                                     'component': 'VBtn',
                                     'text': '⚡ 整理当前目录全部视频',
                                     'props': {
-                                        'color': 'secondary',
+                                        'color': 'primary',
                                         'variant': 'outlined',
                                         'block': True,
                                         'size': 'default',
@@ -730,29 +680,25 @@ class LocalSubDownloader(_PluginBase):
                     {'component': 'VDivider'},
                     {
                         'component': 'VCardText',
-                        'props': {'class': 'pa-3'},
                         'content': [
-                            {
-                                'component': 'VForm',
-                                'content': [
-                                    # 额度提示信息（高颜值轻量化通告条）
-                                    *(
-                                        [{
-                                            'component': 'VAlert',
-                                            'props': {
-                                                'type': 'info',
-                                                'variant': 'tonal',
-                                                'density': 'compact',
-                                                'text': assrt_quota_text,
-                                                'class': 'mb-3'
-                                            }
-                                        }]
-                                        if assrt_quota_text else []
-                                    ),
-                                    # 当前路径 + 返回按钮
+                            # 额度提示信息（高颜值轻量化通告条）
+                            *(
+                                [{
+                                    'component': 'VAlert',
+                                    'props': {
+                                        'type': 'info',
+                                        'variant': 'tonal',
+                                        'density': 'compact',
+                                        'text': assrt_quota_text,
+                                        'class': 'mb-3'
+                                    }
+                                }]
+                                if assrt_quota_text else []
+                            ),
+                            # 当前路径 + 返回按钮
                             {
                                 'component': 'VRow',
-                                'props': {'class': 'mb-2 align-center', 'dense': True},
+                            'props': {'class': 'mb-2 align-center', 'dense': True},
                                 'content': [
                                     {
                                         'component': 'VCol',
@@ -797,7 +743,7 @@ class LocalSubDownloader(_PluginBase):
                             *(
                                 [{
                                     'component': 'VRow',
-                                    'props': {'dense': True, 'class': 'mb-2', 'style': 'max-height:220px;overflow-y:auto;'},
+                                    'props': {'dense': True, 'class': 'mb-2', 'style': 'max-height:120px;overflow-y:auto;'},
                                     'content': [
                                         {
                                             'component': 'VCol',
@@ -827,26 +773,35 @@ class LocalSubDownloader(_PluginBase):
                                 }]
                                 if sub_dirs else []
                             ),
-                            # 视频文件列表组件（高颜值、一键同步开关，绝不丢失勾选状态）
-                            *(
-                                [{
-                                    'component': 'VCard',
-                                    'props': {
-                                        'variant': 'flat',
-                                        'style': 'max-height: 220px; overflow-y: auto; border: 1px solid rgba(0,0,0,0.12); border-radius: 4px;',
-                                        'class': 'mb-3 pa-1'
+                            # 视频文件多选下拉框（一览单行高品质显示，关闭时单次触发）
+                            {
+                                'component': 'VSelect',
+                                'props': {
+                                    'model': 'selected_videos',
+                                    'label': f'选择视频（共 {len(video_files)} 个）',
+                                    'items': video_select_items,
+                                    'multiple': True,
+                                    'chips': True,
+                                    'clearable': True,
+                                    'variant': 'outlined',
+                                    'density': 'comfortable',
+                                    'no-data-text': '当前目录下无视频文件',
+                                    'prepend-inner-icon': 'mdi-movie-open',
+                                    'class': 'mt-1 mb-1',
+                                    'hide-details': True
+                                },
+                                'events': {
+                                    'change': {
+                                        'api': 'plugin/LocalSubDownloader/run_selected',
+                                        'method': 'post'
                                     },
-                                    'content': [{
-                                        'component': 'VList',
-                                        'props': {'density': 'comfortable', 'lines': 'one'},
-                                        'content': video_list_components
-                                    }]
-                                }]
-                                if video_list_components else []
-                            ),
+                                    'update:modelValue': {
+                                        'api': 'plugin/LocalSubDownloader/run_selected',
+                                        'method': 'post'
+                                    }
+                                }
+                            },
                             *video_action_component
-                                ]
-                            }
                         ]
                     }
                 ]
@@ -1221,7 +1176,7 @@ class LocalSubDownloader(_PluginBase):
         try:
             body = await get_request_params(request)
             logger.info(f"[LocalSubDownloader] 接收到手动字幕整理请求，body: {body}")
-            videos = body.get("videos") or body.get("selected_videos")
+            videos = body.get("videos") or body.get("selected_videos") or body.get("value")
             
             video_list = []
             if videos and "{{selected_videos}}" not in str(videos):
