@@ -548,26 +548,56 @@ class LocalSubDownloader(_PluginBase):
                 v_path_str = normalize_path(str(v))
                 is_checked = v_path_str in getattr(self, "_selected_videos_cache", [])
                 
+                # 根据选中状态动态赋予高级质感复选框图标和颜色，完全绕过原生 Checkbox 的冒泡和二次触发 BUG
+                icon = "mdi-checkbox-marked" if is_checked else "mdi-checkbox-blank-outline"
+                icon_color = "success" if is_checked else "grey"
+                
                 video_display_items.append({
-                    'component': 'VCheckbox',
+                    'component': 'VRow',
                     'props': {
-                        'label': f"🎬 {v.name} | {sub_info}",
-                        'modelValue': is_checked,
-                        'value': is_checked,
-                        'hide-details': True,
-                        'color': 'success' if existing_subs else 'primary',
-                        'class': f"px-4 border-bottom text-{subtitle_color} py-1"
+                        'align': 'center',
+                        'dense': True,
+                        'class': 'px-4 py-1 border-bottom'
                     },
-                    'events': {
-                        'change': {
-                            'api': 'plugin/LocalSubDownloader/toggle_video',
-                            'method': 'post',
-                            'params': {
-                                'video_path': v_path_str,
-                                'checked': not is_checked
-                            }
+                    'content': [
+                        {
+                            'component': 'VCol',
+                            'props': {'cols': 'auto'},
+                            'content': [
+                                {
+                                    'component': 'VBtn',
+                                    'props': {
+                                        'icon': icon,
+                                        'variant': 'text',
+                                        'color': icon_color,
+                                        'density': 'comfortable'
+                                    },
+                                    'events': {
+                                        'click': {
+                                            'api': 'plugin/LocalSubDownloader/toggle_video',
+                                            'method': 'post',
+                                            'params': {
+                                                'video_path': v_path_str
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            'component': 'VCol',
+                            'content': [
+                                {
+                                    'component': 'VListItem',
+                                    'props': {
+                                        'title': f"🎬 {v.name}",
+                                        'subtitle': sub_info,
+                                        'class': f"text-{subtitle_color} pa-0"
+                                    }
+                                }
+                            ]
                         }
-                    }
+                    ]
                 })
         else:
             video_display_items.append({
@@ -755,9 +785,9 @@ class LocalSubDownloader(_PluginBase):
                                 },
                                 'content': [
                                     {
-                                        'component': 'VList',
+                                        'component': 'VCardText',
                                         'props': {
-                                            'density': 'comfortable'
+                                            'class': 'pa-0'
                                         },
                                         'content': video_display_items
                                     }
