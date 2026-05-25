@@ -2014,11 +2014,13 @@ class LocalSubDownloader(_PluginBase):
 
     def _assrt_http_get(self, url, headers=None):
         """
-        专为 ASSRT API 接口设计的高速限流代理。
-        限制在最多 10次/分钟 (每 6 秒最多 1 次)，符合 ASSRT 限流额度规则。
-        由于该方法全在后台下载线程中执行，sleep 绝对不会阻塞前台网页，用户体验极速流畅！
+        专为 ASSRT API 接口设计的高速安全代理。
+        1. 限流网关：符合最多 10次/分钟 限制规则。
+        2. Bearer 隐式安全认证：避免在 URL query 发生明文泄漏。
+        3. 备用加速域名 (api.makedie.me) 自动无感容灾。
         """
-        if "api.assrt.net" in url:
+        is_assrt_domain = "api.assrt.net" in url or "api.makedie.me" in url
+        if is_assrt_domain:
             import time
             last_time = getattr(self, "_last_assrt_request_time", 0.0)
             now = time.time()
@@ -2028,13 +2030,36 @@ class LocalSubDownloader(_PluginBase):
                 self.add_log(f"⏳ [ASSRT 限流保护] 限制 10次/分钟 频次，后台挂起等待 {sleep_time:.2f} 秒...")
                 time.sleep(sleep_time)
             self._last_assrt_request_time = time.time()
+            
+            # 使用更安全的 Header Bearer 认证
+            headers = headers or {}
+            headers["Authorization"] = f"Bearer {self._assrt_token}"
+            
+            try:
+                res = self._http_get(url, headers=headers)
+                if res and res.status_code == 200:
+                    return res
+            except Exception as e:
+                logger.warning(f"[LocalSubDownloader] ASSRT主服务器连接失败: {e}，启动备用域名容灾...")
+                
+            # 自动切换到容灾加速备用域名 api.makedie.me
+            if "api.assrt.net" in url:
+                backup_url = url.replace("api.assrt.net", "api.makedie.me")
+                try:
+                    res = self._http_get(backup_url, headers=headers)
+                    if res and res.status_code == 200:
+                        self.add_log("🌐 [ASSRT] 主服务器超时，已成功通过官方加速备用域名完成请求")
+                        return res
+                except Exception as ex:
+                    logger.error(f"[LocalSubDownloader] ASSRT备用域名请求亦失败: {ex}")
+            return None
         return self._http_get(url, headers=headers)
 
     def download_from_assrt(self, video_path: Path, existing_md5s: set) -> bool:
-        # 优先通过 token 和 shooter hash 精准检索
+        # 优先通过 shooter hash 精准检索 (移除明文 token query 并启用 Bearer Auth)
         shooter_hash = self.compute_shooter_hash(video_path)
         if shooter_hash:
-            url_hash = f"https://api.assrt.net/v1/sub/search?token={self._assrt_token}&filehash={shooter_hash}"
+            url_hash = f"https://api.assrt.net/v1/sub/search?filehash={shooter_hash}"
             res = self._assrt_http_get(url_hash)
             if res and res.status_code == 200:
                 if res.text and res.text.strip() and (res.text.strip().startswith("[") or res.text.strip().startswith("{")):
@@ -2048,7 +2073,7 @@ class LocalSubDownloader(_PluginBase):
                     except Exception:
                         pass
 
-        # 降级为关键字检索评分对齐
+        # 降级为关键字检索评分对齐 (引入 no_muxer=1 压制组噪声过滤与 is_file=1 文件名精简)
         import re
         import urllib.parse
         keyword = video_path.stem
@@ -2058,7 +2083,7 @@ class LocalSubDownloader(_PluginBase):
         else:
             keyword = re.sub(r'\s*-\s*', ' ', keyword).strip()
 
-        url_search = f"https://api.assrt.net/v1/sub/search?token={self._assrt_token}&q={urllib.parse.quote(keyword)}&cnt=15"
+        url_search = f"https://api.assrt.net/v1/sub/search?q={urllib.parse.quote(keyword)}&cnt=15&no_muxer=1&is_file=1"
         res = self._assrt_http_get(url_search)
         if not res or res.status_code != 200:
             return False
@@ -2101,7 +2126,7 @@ class LocalSubDownloader(_PluginBase):
             if not sub_id:
                 continue
 
-            detail_url = f"https://api.assrt.net/v1/sub/detail?token={self._assrt_token}&id={sub_id}"
+            detail_url = f"https://api.assrt.net/v1/sub/detail?id={sub_id}"
             res = self._assrt_http_get(detail_url)
             if not res or res.status_code != 200:
                 self.add_log(f"🌐 [ASSRT] Detail接口请求失败 (id={sub_id}, status={getattr(res, 'status_code', 'N/A')})")
