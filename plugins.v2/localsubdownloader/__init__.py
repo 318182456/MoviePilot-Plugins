@@ -85,6 +85,13 @@ async def global_api_toggle_video(request: Request) -> Any:
     return {"code": 1, "message": "插件实例未加载"}
 
 
+async def global_api_run_all(request: Request) -> Any:
+    instance = PluginManager()._running_plugins.get("LocalSubDownloader")
+    if instance:
+        return await instance.api_run_all(request)
+    return {"code": 1, "message": "插件实例未加载"}
+
+
 async def get_request_params(request: Request) -> dict:
     """
     极具鲁棒性的参数提取辅助函数。
@@ -247,6 +254,14 @@ class LocalSubDownloader(_PluginBase):
                 "auth": "bear",
                 "summary": "切换视频的勾选状态",
                 "description": "前台勾选/取消勾选单个视频时触发后台缓存状态同步",
+            },
+            {
+                "path": "/run_all",
+                "endpoint": global_api_run_all,
+                "methods": ["POST", "GET"],
+                "auth": "bear",
+                "summary": "整理当前目录全部视频",
+                "description": "后台异步为当前浏览目录下所有视频文件下载字幕",
             }
         ]
 
@@ -432,15 +447,10 @@ class LocalSubDownloader(_PluginBase):
         """
         利用 Vuetify JSON 模式，在前台详情页渲染高颜值“手动整理控制台”、“下载历史记录表格”与“深色滚屏日志”。
         """
-        # 优先从内存缓存中获取，保障前台刷新页面时无数据库锁等待延迟
-        history = getattr(self, "_history_cache", None)
-        if history is None:
-            history = self.get_data("history") or []
+        # 历史和日志始终从 DB 读取，避免多 Worker 进程下内存缓存脏读
+        history = self.get_data("history") or []
 
-        logs = getattr(self, "_logs_cache", None)
-        if logs is None:
-            logs = self.get_data("logs") or []
-
+        logs = self.get_data("logs") or []
         # 构造表格记录行
         history_rows = []
         for idx, item in enumerate(history):
@@ -531,8 +541,8 @@ class LocalSubDownloader(_PluginBase):
                 ]
             })
 
-        # 2. 构造当前目录下视频文件与已存在字幕对照列表
-        video_display_items = []
+        # 2. 构造 VSelect 多选视频文件选项（不绑定 API 事件，避免页面刷新）
+        video_select_items = []
         if video_files:
             for v in video_files:
                 existing_subs = []
@@ -542,47 +552,12 @@ class LocalSubDownloader(_PluginBase):
                 
                 if existing_subs:
                     sub_list_str = " / ".join(set(existing_subs))
-                    sub_info = f"✅ 已有外部字幕 ( {sub_list_str} )"
-                    subtitle_color = "success font-weight-bold"
+                    item_title = f"🎬 {v.name}   ✅ 已有字幕 ({sub_list_str})"
                 else:
-                    sub_info = "❌ 暂无外部字幕"
-                    subtitle_color = "error font-weight-bold"
+                    item_title = f"🎬 {v.name}   ❌ 无字幕"
                 
                 v_path_str = normalize_path(str(v))
-                is_checked = v_path_str in getattr(self, "_selected_videos_cache", [])
-                
-                # 根据选中状态动态赋予高级质感复选框图标和颜色，完全绕过原生 Checkbox 的冒泡和二次触发 BUG
-                icon = "mdi-checkbox-marked" if is_checked else "mdi-checkbox-blank-outline"
-                icon_color = "success" if is_checked else "grey"
-                
-                video_display_items.append({
-                    'component': 'VCheckbox',
-                    'props': {
-                        'label': f"🎬 {v.name} | {sub_info}",
-                        'modelValue': is_checked,
-                        'value': is_checked,
-                        'hide-details': True,
-                        'color': 'success' if existing_subs else 'primary',
-                        'class': f"px-4 border-bottom text-{subtitle_color} py-1"
-                    },
-                    'events': {
-                        'click': {
-                            'api': 'plugin/LocalSubDownloader/toggle_video',
-                            'method': 'post',
-                            'params': {
-                                'video_path': v_path_str
-                            }
-                        }
-                    }
-                })
-        else:
-            video_display_items.append({
-                'component': 'VListItem',
-                'props': {
-                    'title': "当前目录下未发现待整理的视频文件",
-                    'class': "text-grey text-center py-2"
-                }
-            })
+                video_select_items.append({"title": item_title, "value": v_path_str})
 
         # 根目录下拉组件数据源
         root_items = [{"title": f"📂 {p}", "value": str(p)} for p in root_paths]
@@ -636,24 +611,25 @@ class LocalSubDownloader(_PluginBase):
             video_action_component = [
                 {
                     'component': 'VRow',
-                    'props': {'class': 'mt-4 justify-end'},
+                    'props': {'class': 'mt-2 justify-end'},
                     'content': [
                         {
                             'component': 'VCol',
-                            'props': {'cols': 12, 'md': 4},
+                            'props': {'cols': 12, 'md': 5},
                             'content': [
                                 {
                                     'component': 'VBtn',
-                                    'text': '🔥 立即开始整理',
+                                    'text': '⚡ 整理当前目录全部视频',
                                     'props': {
-                                        'color': 'success',
+                                        'color': 'primary',
+                                        'variant': 'outlined',
                                         'block': True,
-                                        'size': 'large',
-                                        'prepend-icon': 'mdi-cloud-download'
+                                        'size': 'default',
+                                        'prepend-icon': 'mdi-folder-play'
                                     },
                                     'events': {
                                         'click': {
-                                            'api': 'plugin/LocalSubDownloader/run_selected',
+                                            'api': 'plugin/LocalSubDownloader/run_all',
                                             'method': 'post'
                                         }
                                     }
@@ -677,163 +653,175 @@ class LocalSubDownloader(_PluginBase):
             ]
 
         return [
+            # ============ 卡片1：手动整理控制台 ============
             {
                 'component': 'VCard',
-                'props': {'title': '🛠️ 手动字幕整理控制台', 'variant': 'outlined', 'class': 'mb-4'},
+                'props': {'variant': 'outlined', 'class': 'mb-3'},
                 'content': [
                     {
+                        'component': 'VCardTitle',
+                        'props': {'class': 'text-subtitle-1 font-weight-bold pa-3 pb-1'},
+                        'text': '🛠️ 手动字幕整理控制台'
+                    },
+                    {'component': 'VDivider'},
+                    {
                         'component': 'VCardText',
+                        'props': {'class': 'pa-3'},
                         'content': [
-                            # 2. 当前路径位置与导航面包屑
+                            # 当前路径 + 返回按钮
                             {
                                 'component': 'VRow',
-                                'props': {'class': 'align-center mb-2'},
+                                'props': {'class': 'mb-2 align-center', 'dense': True},
                                 'content': [
                                     {
                                         'component': 'VCol',
                                         'props': {'cols': 12, 'md': 9},
-                                        'content': [
-                                            {
-                                                'component': 'VAlert',
-                                                'props': {
-                                                    'type': 'info',
-                                                    'variant': 'tonal',
-                                                    'icon': 'mdi-folder-open',
-                                                    'text': f"当前目录: {current_dir or '未选择'}",
-                                                    'density': 'compact'
-                                                }
+                                        'content': [{
+                                            'component': 'VTextField',
+                                            'props': {
+                                                'model-value': current_dir or '未选择目录',
+                                                'readonly': True,
+                                                'variant': 'outlined',
+                                                'density': 'compact',
+                                                'prepend-inner-icon': 'mdi-folder-open',
+                                                'label': '当前目录',
+                                                'hide-details': True
                                             }
-                                        ]
+                                        }]
                                     },
                                     {
                                         'component': 'VCol',
                                         'props': {'cols': 12, 'md': 3},
-                                        'content': [
-                                            {
+                                        'content': [{
+                                            'component': 'VBtn',
+                                            'text': '↑ 返回上一级',
+                                            'props': {
+                                                'variant': 'tonal',
+                                                'color': 'secondary',
+                                                'block': True,
+                                                'prepend-icon': 'mdi-arrow-up-bold',
+                                                'disabled': not current_dir or normalize_path(str(Path(current_dir).parent)) == normalize_path(current_dir)
+                                            },
+                                            'events': {
+                                                'click': {
+                                                    'api': 'plugin/LocalSubDownloader/go_up',
+                                                    'method': 'post'
+                                                }
+                                            }
+                                        }]
+                                    }
+                                ]
+                            },
+                            # 子目录磁贴按钮（硬编码 params，稳定可靠）
+                            *(
+                                [{
+                                    'component': 'VRow',
+                                    'props': {'dense': True, 'class': 'mb-2'},
+                                    'content': [
+                                        {
+                                            'component': 'VCol',
+                                            'props': {'cols': 6, 'md': 4, 'lg': 3},
+                                            'content': [{
                                                 'component': 'VBtn',
-                                                'text': '返回上一级',
+                                                'text': f'📁 {d}',
                                                 'props': {
-                                                    'variant': 'outlined',
-                                                    'color': 'secondary',
+                                                    'variant': 'tonal',
                                                     'block': True,
-                                                    'prepend-icon': 'mdi-arrow-up',
-                                                    'disabled': not current_dir or normalize_path(str(Path(current_dir).parent)) == normalize_path(current_dir)
+                                                    'color': 'primary',
+                                                    'class': 'text-none text-truncate',
+                                                    'density': 'comfortable',
+                                                    'size': 'small'
                                                 },
                                                 'events': {
                                                     'click': {
-                                                        'api': 'plugin/LocalSubDownloader/go_up',
-                                                        'method': 'post'
+                                                        'api': 'plugin/LocalSubDownloader/go_into',
+                                                        'method': 'post',
+                                                        'params': {'dir_name': d}
                                                     }
                                                 }
-                                            }
-                                        ]
-                                    }
-                                ]
-                            },
-                            # 3. 逐级子目录列表
+                                            }]
+                                        }
+                                        for d in sub_dirs
+                                    ]
+                                }]
+                                if sub_dirs else []
+                            ),
+                            # 视频文件多选（关闭下拉自动触发下载）
                             {
-                                'component': 'VCard',
+                                'component': 'VSelect',
                                 'props': {
-                                    'title': '📁 子目录列表 (可点击进入下一级)',
-                                    'variant': 'tonal',
-                                    'class': 'mb-4 bg-grey-lighten-4'
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VCardText',
-                                        'content': [
-                                            {
-                                                'component': 'VRow',
-                                                'props': {'dense': True},
-                                                'content': dir_buttons
-                                            }
-                                        ]
-                                    }
-                                ]
-                            },
-                            # 3.5 🎬 当前目录音视频与已存字幕对照表
-                            {
-                                'component': 'VCard',
-                                'props': {
-                                    'title': '🎬 当前目录音视频与已存字幕对照表',
+                                    'model': 'selected_videos',
+                                    'label': f'选择视频 · 关闭下拉自动下载字幕（共 {len(video_files)} 个）',
+                                    'items': video_select_items,
+                                    'multiple': True,
+                                    'chips': True,
+                                    'clearable': True,
                                     'variant': 'outlined',
-                                    'class': 'mb-4'
+                                    'density': 'comfortable',
+                                    'no-data-text': '当前目录下无视频文件',
+                                    'prepend-inner-icon': 'mdi-movie-open',
+                                    'class': 'mt-1 mb-1',
+                                    'hide-details': True
                                 },
-                                'content': [
-                                    {
-                                        'component': 'VList',
-                                        'props': {
-                                            'density': 'comfortable'
-                                        },
-                                        'content': video_display_items
+                                'events': {
+                                    'change': {
+                                        'api': 'plugin/LocalSubDownloader/run_selected',
+                                        'method': 'post',
+                                        'params': {'videos': '{{selected_videos}}'}
                                     }
-                                ]
+                                }
                             },
-                            # 4. 视频列表与字幕爬取执行
                             *video_action_component
                         ]
                     }
                 ]
             },
+            # ============ 卡片2：历史字幕下载记录 ============
             {
                 'component': 'VCard',
-                'props': {'title': '📜 历史字幕下载记录', 'variant': 'outlined', 'class': 'mb-4'},
+                'props': {'variant': 'outlined'},
                 'content': [
                     {
-                        'component': 'VCardText',
-                        'content': [
-                            {
-                                'component': 'VDataTable',
-                                'props': {
-                                    'headers': [
-                                        {'title': '#', 'key': 'index', 'width': '50px'},
-                                        {'title': '时间', 'key': 'time', 'width': '180px'},
-                                        {'title': '视频文件', 'key': 'video'},
-                                        {'title': '字幕来源', 'key': 'source', 'width': '110px'},
-                                        {'title': '保存字幕名', 'key': 'file'},
-                                        {'title': '下载状态', 'key': 'status', 'width': '100px'}
-                                    ],
-                                    'items': list(reversed(history_rows)),
-                                    'density': 'compact',
-                                    'items-per-page': 10
-                                }
-                            }
-                        ]
-                    }
-                ]
-            },
-            {
-                'component': 'VCard',
-                'props': {'title': '💻 实时运行日志', 'variant': 'outlined'},
-                'content': [
+                        'component': 'VCardTitle',
+                        'props': {'class': 'text-subtitle-1 font-weight-bold pa-3 pb-1'},
+                        'text': f'📜 历史字幕下载记录（共 {len(history_rows)} 条）'
+                    },
+                    {'component': 'VDivider'},
                     {
                         'component': 'VCardText',
-                        'content': [
-                            {
-                                'component': 'VAlert',
-                                'props': {
-                                    'type': 'warning',
-                                    'variant': 'tonal',
-                                    'text': '💡 提示：因为 MoviePilot 插件页面为静态渲染，在点击“立即开始整理”后，请手动刷新浏览器网页以刷新拉取并展现最新执行进度！',
-                                    'class': 'mb-3',
-                                    'density': 'compact'
-                                }
-                            },
-                            {
+                        'props': {'class': 'pa-0'},
+                        'content': (
+                            [{
                                 'component': 'VList',
-                                'props': {
-                                    'density': 'compact',
-                                    'class': 'bg-grey-darken-4 text-green-accent-3 rounded',
-                                    'style': 'max-height: 250px; overflow-y: auto; font-family: monospace;'
-                                },
+                                'props': {'density': 'compact', 'lines': 'two'},
                                 'content': [
-                                    {
-                                        'component': 'VListItem',
-                                        'props': {'title': log}
-                                    } for log in logs_display
+                                    item
+                                    for row in list(reversed(history_rows))
+                                    for item in [
+                                        {
+                                            'component': 'VListItem',
+                                            'props': {
+                                                'title': f"[{row['source']}]  {row['file']}",
+                                                'subtitle': f"{row['time']}  ·  {row['video']}  ·  {row['status']}",
+                                                'prepend-icon': 'mdi-check-circle-outline' if row['status'] == '成功' else 'mdi-alert-circle-outline',
+                                                'class': 'py-2'
+                                            }
+                                        },
+                                        {'component': 'VDivider'}
+                                    ]
                                 ]
-                            }
-                        ]
+                            }]
+                            if history_rows else
+                            [{
+                                'component': 'VListItem',
+                                'props': {
+                                    'title': '暂无下载记录',
+                                    'subtitle': '成功下载字幕后将在此显示历史',
+                                    'prepend-icon': 'mdi-history',
+                                    'class': 'text-grey py-6'
+                                }
+                            }]
+                        )
                     }
                 ]
             }
@@ -1197,6 +1185,38 @@ class LocalSubDownloader(_PluginBase):
         except Exception as e:
             return {"code": 1, "message": f"启动批量字幕下载失败: {e}"}
 
+    async def api_run_all(self, request: Request) -> Any:
+        """
+        前台 POST 请求调用的端点：整理当前目录下所有视频文件
+        """
+        try:
+            current_dir = self.get_current_dir_path()
+            if not current_dir:
+                return {"code": 1, "message": "当前目录未设置，请先进入目标目录"}
+
+            c_path = Path(current_dir)
+            if not c_path.exists() or not c_path.is_dir():
+                return {"code": 1, "message": f"目录不存在或无法访问：{current_dir}"}
+
+            video_extensions = {'.mp4', '.mkv', '.avi', '.ts', '.wmv', '.mov', '.flv', '.rmvb'}
+            video_list = [
+                normalize_path(str(f))
+                for f in c_path.iterdir()
+                if f.is_file() and f.suffix.lower() in video_extensions and not f.name.startswith('.')
+            ]
+
+            if not video_list:
+                return {"code": 1, "message": f"当前目录下未发现视频文件：{current_dir}"}
+
+            logger.info(f"[LocalSubDownloader] 整理当前目录全部视频: {current_dir}，共 {len(video_list)} 个")
+            thread = threading.Thread(target=self._process_selected_videos, args=(video_list,))
+            thread.daemon = True
+            thread.start()
+
+            return {"code": 0, "message": f"已启动当前目录全部 {len(video_list)} 个视频的字幕下载任务，请在下方观察实时运行日志"}
+        except Exception as e:
+            return {"code": 1, "message": f"启动失败: {e}"}
+
     def _process_selected_videos(self, video_paths: List[str]):
         """
         异步后台线程执行：批量为选定的视频下载字幕
@@ -1506,16 +1526,25 @@ class LocalSubDownloader(_PluginBase):
             self.add_log(f"⚠️ 视频路径不存在，跳过匹配: {video_path}")
             return False
 
+        self.add_log(f"🔍 开始处理: {video_path.name}")
+
         # 1. 收集本地已有字幕 MD5 用于去重
         existing_md5s = set()
+        existing_sub_names = []
         for sub_file in video_path.parent.glob(f"{video_path.stem}*"):
             if sub_file.suffix.lower() in {'.srt', '.ass', '.vtt'}:
+                existing_sub_names.append(sub_file.name)
                 try:
                     with open(sub_file, 'rb') as sf:
                         data = sf.read()
                     existing_md5s.add(hashlib.md5(data).hexdigest())
                 except Exception:
                     pass
+
+        if existing_sub_names:
+            self.add_log(f"📂 检测到本地已有字幕: {', '.join(existing_sub_names)}")
+        else:
+            self.add_log(f"📂 本地无字幕文件，将尝试全部来源下载")
 
         # 2. 精准匹配轨道 (Hash-based)
         precision_success = False
@@ -1525,34 +1554,78 @@ class LocalSubDownloader(_PluginBase):
             try:
                 shooter_hash = self.compute_shooter_hash(video_path)
                 if shooter_hash:
-                    precision_success |= self.download_from_shooter(video_path, shooter_hash, existing_md5s)
+                    self.add_log(f"🔗 [射手网] 正在Hash精准匹配...")
+                    result = self.download_from_shooter(video_path, shooter_hash, existing_md5s)
+                    if result:
+                        precision_success = True
+                    else:
+                        self.add_log(f"🔗 [射手网] Hash匹配无结果")
+                else:
+                    self.add_log(f"🔗 [射手网] 文件过小无法计算Hash，跳过")
             except Exception as e:
-                logger.error(f"[LocalSubDownloader] 射手哈希匹配报错: {e}")
+                self.add_log(f"🔗 [射手网] 匹配出错: {e}")
+        else:
+            self.add_log(f"🔗 [射手网] 已禁用，跳过")
 
         # 2.2 迅雷精准匹配
         if self._xunlei_enabled:
             try:
                 xunlei_cid = self.compute_xunlei_cid(video_path)
                 if xunlei_cid:
-                    precision_success |= self.download_from_xunlei(video_path, xunlei_cid, existing_md5s)
+                    self.add_log(f"⚡ [迅雷] 正在CID精准匹配...")
+                    result = self.download_from_xunlei(video_path, xunlei_cid, existing_md5s)
+                    if result:
+                        precision_success = True
+                    else:
+                        self.add_log(f"⚡ [迅雷] CID匹配无结果")
+                else:
+                    self.add_log(f"⚡ [迅雷] 无法计算CID，跳过")
             except Exception as e:
-                logger.error(f"[LocalSubDownloader] 迅雷哈希匹配报错: {e}")
+                self.add_log(f"⚡ [迅雷] 匹配出错: {e}")
+        else:
+            self.add_log(f"⚡ [迅雷] 已禁用，跳过")
 
-        # 3. 智能模糊评分检索轨道 (仅在精准轨道毫无所获且本地无字幕时触发)
-        if not precision_success and len(existing_md5s) == 0:
+        # 3. 智能模糊评分检索轨道
+        if precision_success:
+            self.add_log(f"✅ Hash精准匹配已成功，跳过模糊检索")
+        else:
+            if existing_sub_names:
+                self.add_log(f"🔎 本地已有字幕但精准匹配无新内容，继续尝试模糊检索...")
+
             # 3.1 ASSRT 评分检索
             if self._assrt_enabled and self._assrt_token:
                 try:
-                    precision_success |= self.download_from_assrt(video_path, existing_md5s)
+                    self.add_log(f"🌐 [ASSRT] 正在智能评分检索...")
+                    result = self.download_from_assrt(video_path, existing_md5s)
+                    if result:
+                        precision_success = True
+                    else:
+                        self.add_log(f"🌐 [ASSRT] 未找到匹配字幕")
                 except Exception as e:
-                    logger.error(f"[LocalSubDownloader] ASSRT评分检索报错: {e}")
+                    self.add_log(f"🌐 [ASSRT] 检索出错: {e}")
+            elif self._assrt_enabled and not self._assrt_token:
+                self.add_log(f"🌐 [ASSRT] Token未配置，跳过")
+            else:
+                self.add_log(f"🌐 [ASSRT] 已禁用，跳过")
 
-            # 3.2 A4k (SubDL) 评分检索
+            # 3.2 SubDL 评分检索
             if self._subdl_enabled and self._subdl_api_key:
                 try:
-                    precision_success |= self.download_from_subdl(video_path, existing_md5s)
+                    self.add_log(f"🌐 [SubDL] 正在智能评分检索...")
+                    result = self.download_from_subdl(video_path, existing_md5s)
+                    if result:
+                        precision_success = True
+                    else:
+                        self.add_log(f"🌐 [SubDL] 未找到匹配字幕")
                 except Exception as e:
-                    logger.error(f"[LocalSubDownloader] SubDL评分检索报错: {e}")
+                    self.add_log(f"🌐 [SubDL] 检索出错: {e}")
+            elif self._subdl_enabled and not self._subdl_api_key:
+                self.add_log(f"🌐 [SubDL] API Key未配置，跳过")
+            else:
+                self.add_log(f"🌐 [SubDL] 已禁用，跳过")
+
+        if not precision_success:
+            self.add_log(f"❌ [{video_path.name}] 所有来源均未获取到新字幕")
 
         return precision_success
 
@@ -1929,25 +2002,66 @@ class LocalSubDownloader(_PluginBase):
 
             detail_url = f"https://api.assrt.net/v1/sub/detail?token={self._assrt_token}&id={sub_id}"
             res = self._http_get(detail_url)
-            if res and res.status_code == 200:
-                if res.text and res.text.strip() and (res.text.strip().startswith("[") or res.text.strip().startswith("{")):
+            if not res or res.status_code != 200:
+                self.add_log(f"🌐 [ASSRT] Detail接口请求失败 (id={sub_id}, status={getattr(res, 'status_code', 'N/A')})")
+                continue
+
+            if not res.text or not res.text.strip() or not (res.text.strip().startswith("[") or res.text.strip().startswith("{")):
+                self.add_log(f"🌐 [ASSRT] Detail接口返回非JSON响应: {res.text[:80] if res.text else 'empty'}")
+                continue
+
+            try:
+                data = res.json()
+                if data.get("status") != 0:
+                    self.add_log(f"🌐 [ASSRT] Detail接口状态异常: status={data.get('status')}, msg={data.get('msg', '')}")
+                    continue
+
+                # 正确路径: sub.subs[0].url (参照 ChineseSubFinder OneSubDetail 结构体)
+                sub_subs = data.get("sub", {}).get("subs", [])
+                if not sub_subs:
+                    self.add_log(f"🌐 [ASSRT] Detail接口返回 subs 为空 (id={sub_id})")
+                    continue
+
+                url = sub_subs[0].get("url") if isinstance(sub_subs, list) else None
+                if not url:
+                    self.add_log(f"🌐 [ASSRT] Detail接口 subs[0].url 为空 (id={sub_id}), keys={list(sub_subs[0].keys()) if sub_subs else []}")
+                    continue
+
+                # ASSRT 文件服务器需要 Referer + UA 头，否则拒绝下载
+                assrt_dl_headers = {
+                    "Referer": "https://assrt.net/",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                }
+                dl_res = self._http_get(url, headers=assrt_dl_headers)
+                if dl_res and dl_res.status_code == 200:
+                    success_any |= self.save_subtitle_stream(
+                        video_path=video_path,
+                        filename=filename,
+                        content=dl_res.content,
+                        existing_md5s=existing_md5s,
+                        source_label="ASSRT"
+                    )
+                else:
+                    # 退化：直接用 urllib 带头下载
                     try:
-                        data = res.json()
-                        if data.get("status") == 0:
-                            detail = data.get("sub", {}).get("detail", {})
-                            url = detail.get("url")
-                            if url:
-                                dl_res = self._http_get(url)
-                                if dl_res and dl_res.status_code == 200:
-                                    success_any |= self.save_subtitle_stream(
-                                        video_path=video_path,
-                                        filename=filename,
-                                        content=dl_res.content,
-                                        existing_md5s=existing_md5s,
-                                        source_label="ASSRT"
-                                    )
-                    except Exception:
-                        pass
+                        import urllib.request
+                        req = urllib.request.Request(url, headers=assrt_dl_headers)
+                        with urllib.request.urlopen(req, timeout=30) as resp:
+                            raw = resp.read()
+                        if raw:
+                            success_any |= self.save_subtitle_stream(
+                                video_path=video_path,
+                                filename=filename,
+                                content=raw,
+                                existing_md5s=existing_md5s,
+                                source_label="ASSRT"
+                            )
+                        else:
+                            self.add_log(f"🌐 [ASSRT] 字幕文件内容为空: {url[:80]}")
+                    except Exception as dl_e:
+                        self.add_log(f"🌐 [ASSRT] 字幕文件下载失败: {dl_e} | URL: {url[:80]}")
+            except Exception as e:
+                self.add_log(f"🌐 [ASSRT] 解析Detail响应出错: {e}")
         return success_any
 
     def download_from_subdl(self, video_path: Path, existing_md5s: set) -> bool:
