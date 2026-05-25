@@ -92,6 +92,13 @@ async def global_api_run_all(request: Request) -> Any:
     return {"code": 1, "message": "插件实例未加载"}
 
 
+async def global_api_change_sort(request: Request) -> Any:
+    instance = PluginManager()._running_plugins.get("LocalSubDownloader")
+    if instance:
+        return await instance.api_change_sort(request)
+    return {"code": 1, "message": "插件实例未加载"}
+
+
 async def get_request_params(request: Request) -> dict:
     """
     极具鲁棒性的参数提取辅助函数。
@@ -370,7 +377,15 @@ class LocalSubDownloader(_PluginBase):
                 "methods": ["POST", "GET"],
                 "auth": "bear",
                 "summary": "整理当前目录全部视频",
-                "description": "后台异步为当前浏览目录下所有视频文件下载字幕",
+                "description": "后台异步为当前浏览目录下所有视频 file 下载字幕",
+            },
+            {
+                "path": "/change_sort",
+                "endpoint": global_api_change_sort,
+                "methods": ["POST", "GET"],
+                "auth": "bear",
+                "summary": "切换排序方式",
+                "description": "切换当前手动字幕整理目录下的排序方式",
             }
         ]
 
@@ -583,7 +598,7 @@ class LocalSubDownloader(_PluginBase):
         # 实时从数据库加载最新已勾选的视频列表，确保多进程/多 Worker 下的状态渲染绝对一致，防范脏读
         self._selected_videos_cache = self.get_data("selected_videos") or []
 
-
+        sort_by = self.get_data("sort_by") or "name"
 
         # 扫描当前浏览目录下的子目录与视频文件
         sub_dirs = []
@@ -606,24 +621,53 @@ class LocalSubDownloader(_PluginBase):
                 except Exception as e:
                     logger.error(f"[LocalSubDownloader] 扫描目录 {current_dir} 失败: {e}")
 
-            sub_dirs.sort()
-            video_files.sort(key=lambda x: x.name)
+            if sort_by == "time":
+                # 按修改时间排序（最新在前）
+                def get_dir_mtime(d_name):
+                    try:
+                        return (c_path / d_name).stat().st_mtime
+                    except Exception:
+                        return 0
+                sub_dirs.sort(key=get_dir_mtime, reverse=True)
+                
+                def get_file_mtime(f_path):
+                    try:
+                        return f_path.stat().st_mtime
+                    except Exception:
+                        return 0
+                video_files.sort(key=get_file_mtime, reverse=True)
+            else:
+                # 默认按名称排序
+                sub_dirs.sort()
+                video_files.sort(key=lambda x: x.name)
 
-        # 1. 完整定义子目录按钮磁贴列表 (解决原本未定义 dir_buttons 引起的组件 NameError)
-        dir_buttons = []
+        # 1. 完整定义子目录按钮磁贴列表
+        sub_dir_details = []
         for d in sub_dirs:
+            display_name = f"📁 {d}"
+            if sort_by == "time" and current_dir:
+                try:
+                    mtime = (Path(current_dir) / d).stat().st_mtime
+                    dt_str = datetime.datetime.fromtimestamp(mtime).strftime("%m-%d %H:%M")
+                    display_name = f"📁 {d} ({dt_str})"
+                except Exception:
+                    pass
+            sub_dir_details.append((d, display_name))
+
+        dir_buttons = []
+        for d, display_name in sub_dir_details:
             dir_buttons.append({
                 'component': 'VCol',
                 'props': {'cols': 6, 'md': 3, 'lg': 2},
                 'content': [
                     {
                         'component': 'VBtn',
-                        'text': f"📁 {d}",
+                        'text': display_name,
                         'props': {
                             'variant': 'outlined',
                             'block': True,
                             'color': 'primary',
-                            'class': 'text-none text-truncate',
+                            'class': 'text-none text-truncate justify-start',
                             'density': 'comfortable'
                         },
                         'events': {
@@ -715,7 +759,10 @@ class LocalSubDownloader(_PluginBase):
                                 {
                                     'component': 'VCol',
                                     'props': {'cols': True, 'class': 'text-truncate font-weight-medium text-body-2', 'style': 'max-width: calc(100% - 130px);'},
-                                    'text': f"🎬 {v.name}"
+                                    'text': (
+                                        f"🎬 {v.name} ({datetime.datetime.fromtimestamp(v.stat().st_mtime).strftime('%m-%d %H:%M')})"
+                                        if sort_by == "time" else f"🎬 {v.name}"
+                                    )
                                 },
                                 {
                                     'component': 'VCol',
@@ -906,6 +953,41 @@ class LocalSubDownloader(_PluginBase):
                                             }
                                         ]
                                     },
+                                    # 排序控制行
+                                    {
+                                        'component': 'VRow',
+                                        'props': {'class': 'mb-2 align-center', 'dense': True},
+                                        'content': [
+                                            {
+                                                'component': 'VCol',
+                                                'props': {'cols': 12, 'md': 4},
+                                                'content': [
+                                                    {
+                                                        'component': 'VSelect',
+                                                        'props': {
+                                                            'model-value': sort_by,
+                                                            'model': 'sort_by',
+                                                            'label': '🔀 排序方式',
+                                                            'items': [
+                                                                {'title': '🔤 按名称排序', 'value': 'name'},
+                                                                {'title': '📅 按修改时间排序', 'value': 'time'}
+                                                            ],
+                                                            'variant': 'outlined',
+                                                            'density': 'compact',
+                                                            'hide-details': True
+                                                        },
+                                                        'events': {
+                                                            'change': {
+                                                                'api': 'plugin/LocalSubDownloader/change_sort',
+                                                                'method': 'post',
+                                                                'params': {'sort_by': '{{sort_by}}'}
+                                                            }
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
                                     # 子目录磁贴按钮（硬编码 params，稳定可靠）
                                     *(
                                         [{
@@ -917,12 +999,12 @@ class LocalSubDownloader(_PluginBase):
                                                     'props': {'cols': 6, 'md': 4, 'lg': 3},
                                                     'content': [{
                                                         'component': 'VBtn',
-                                                        'text': f'📁 {d}',
+                                                        'text': display_name,
                                                         'props': {
                                                             'variant': 'tonal',
                                                             'block': True,
                                                             'color': 'primary',
-                                                            'class': 'text-none text-truncate',
+                                                            'class': 'text-none text-truncate justify-start',
                                                             'density': 'comfortable',
                                                             'size': 'small'
                                                         },
@@ -935,7 +1017,7 @@ class LocalSubDownloader(_PluginBase):
                                                         }
                                                     }]
                                                 }
-                                                for d in sub_dirs
+                                                for d, display_name in sub_dir_details
                                             ]
                                         }]
                                         if sub_dirs else []
@@ -1428,6 +1510,21 @@ class LocalSubDownloader(_PluginBase):
             return {"code": 0, "message": f"已启动当前目录全部 {len(video_list)} 个视频的字幕下载任务"}
         except Exception as e:
             return {"code": 1, "message": f"启动失败: {e}"}
+
+    async def api_change_sort(self, request: Request) -> Any:
+        """
+        前台 POST 请求调用的端点：切换当前目录排列方式 (名称/时间)
+        """
+        try:
+            body = await get_request_params(request)
+            sort_by = body.get("sort_by") or "name"
+            if sort_by not in ("name", "time"):
+                sort_by = "name"
+            self.save_data("sort_by", sort_by)
+            self.add_log(f"↕️ 排序方式已切换为: {'按修改时间' if sort_by == 'time' else '按名称'}")
+            return {"code": 0, "message": f"排序方式已切换为: {'按修改时间' if sort_by == 'time' else '按名称'}"}
+        except Exception as e:
+            return {"code": 1, "message": f"切换排序失败: {e}"}
 
     def _process_selected_videos(self, video_paths: List[str]):
         """
