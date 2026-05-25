@@ -555,7 +555,7 @@ class LocalSubDownloader(_PluginBase):
                 ]
             })
 
-        # 2. 构造高颜值、超紧凑视频文件列表（利用 VRow/VCol 列布局让开关靠右完美同行对齐，绝不换行拉伸）
+        # 2. 构造高颜值、超紧凑视频文件复选框列表（全部保存在浏览器本地 Vue State 中，点击时绝不请求 API！）
         video_list_components = []
         if video_files:
             for v in video_files:
@@ -565,77 +565,39 @@ class LocalSubDownloader(_PluginBase):
                         existing_subs.append(sub_file.suffix[1:].upper())
                 
                 v_path_str = normalize_path(str(v))
-                is_checked = v_path_str in self._selected_videos_cache
                 
                 if existing_subs:
                     sub_list_str = " / ".join(set(existing_subs))
                     status_text = f"✅ 已有字幕 ({sub_list_str})"
-                    status_color = "text-success"
                 else:
                     status_text = "❌ 无字幕"
-                    status_color = "text-grey"
+                
+                # 拼装成一行显示: 🎬 视频名   ·   已有字幕
+                label_html = f"🎬 {v.name}  ·  {status_text}"
                 
                 video_list_components.append({
-                    'component': 'VListItem',
-                    'props': {
-                        'class': 'py-1 px-2 border-bottom',
-                        'density': 'compact',
-                        'style': 'background: transparent;'
-                    },
-                    'content': [{
-                        'component': 'VRow',
-                        'props': {'align': 'center', 'no-gutters': True, 'dense': True},
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 10, 'class': 'd-flex align-center overflow-hidden'},
-                                'content': [
-                                    {
-                                        'component': 'VIcon',
-                                        'props': {
-                                            'icon': 'mdi-movie-open',
-                                            'color': 'primary',
-                                            'class': 'mr-3',
-                                            'size': 'small'
-                                        }
-                                    },
-                                    {
-                                        'component': 'VListItem',
-                                        'props': {
-                                            'title': v.name,
-                                            'subtitle': status_text,
-                                            'density': 'compact',
-                                            'class': 'pa-0 ma-0 text-truncate',
-                                            'style': 'background: transparent; max-width: 90%;'
-                                        }
+                    'component': 'VRow',
+                    'props': {'align': 'center', 'no-gutters': True, 'dense': True, 'class': 'py-1 border-bottom'},
+                    'content': [
+                        {
+                            'component': 'VCol',
+                            'props': {'cols': 12},
+                            'content': [
+                                {
+                                    'component': 'VCheckbox',
+                                    'props': {
+                                        'model': 'selected_videos',
+                                        'value': v_path_str,
+                                        'label': label_html,
+                                        'color': 'primary',
+                                        'density': 'compact',
+                                        'hide-details': True,
+                                        'class': 'ma-0 pa-0 text-truncate text-body-2'
                                     }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 2, 'class': 'text-right'},
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model-value': is_checked,
-                                            'color': 'primary',
-                                            'density': 'compact',
-                                            'hide-details': True,
-                                            'class': 'd-inline-flex align-center ma-0 pa-0'
-                                        },
-                                        'events': {
-                                            'change': {
-                                                'api': 'plugin/LocalSubDownloader/toggle_video',
-                                                'method': 'post',
-                                                'params': {'video_path': v_path_str}
-                                            }
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    }]
+                                }
+                            ]
+                        }
+                    ]
                 })
 
         # 根目录下拉组件数据源
@@ -709,7 +671,8 @@ class LocalSubDownloader(_PluginBase):
                                     'events': {
                                         'click': {
                                             'api': 'plugin/LocalSubDownloader/run_selected',
-                                            'method': 'post'
+                                            'method': 'post',
+                                            'params': {'videos': '{{selected_videos}}'}
                                         }
                                     }
                                 }
@@ -770,21 +733,24 @@ class LocalSubDownloader(_PluginBase):
                         'component': 'VCardText',
                         'props': {'class': 'pa-3'},
                         'content': [
-                            # 额度提示信息（高颜值轻量化通告条）
-                            *(
-                                [{
-                                    'component': 'VAlert',
-                                    'props': {
-                                        'type': 'info',
-                                        'variant': 'tonal',
-                                        'density': 'compact',
-                                        'text': assrt_quota_text,
-                                        'class': 'mb-3'
-                                    }
-                                }]
-                                if assrt_quota_text else []
-                            ),
-                            # 当前路径 + 返回按钮
+                            {
+                                'component': 'VForm',
+                                'content': [
+                                    # 额度提示信息（高颜值轻量化通告条）
+                                    *(
+                                        [{
+                                            'component': 'VAlert',
+                                            'props': {
+                                                'type': 'info',
+                                                'variant': 'tonal',
+                                                'density': 'compact',
+                                                'text': assrt_quota_text,
+                                                'class': 'mb-3'
+                                            }
+                                        }]
+                                        if assrt_quota_text else []
+                                    ),
+                                    # 当前路径 + 返回按钮
                             {
                                 'component': 'VRow',
                                 'props': {'class': 'mb-2 align-center', 'dense': True},
@@ -868,18 +834,20 @@ class LocalSubDownloader(_PluginBase):
                                     'component': 'VCard',
                                     'props': {
                                         'variant': 'flat',
-                                        'style': 'max-height: 320px; overflow-y: auto; border: 1px solid rgba(0,0,0,0.12); border-radius: 4px;',
+                                        'style': 'max-height: 220px; overflow-y: auto; border: 1px solid rgba(0,0,0,0.12); border-radius: 4px;',
                                         'class': 'mb-3 pa-1'
                                     },
                                     'content': [{
                                         'component': 'VList',
-                                        'props': {'density': 'comfortable', 'lines': 'two'},
+                                        'props': {'density': 'comfortable', 'lines': 'one'},
                                         'content': video_list_components
                                     }]
                                 }]
                                 if video_list_components else []
                             ),
                             *video_action_component
+                                ]
+                            }
                         ]
                     }
                 ]
@@ -901,7 +869,7 @@ class LocalSubDownloader(_PluginBase):
                         'content': (
                             [{
                                 'component': 'VList',
-                                'props': {'density': 'compact', 'lines': 'two', 'style': 'max-height:300px;overflow-y:auto;'},
+                                'props': {'density': 'compact', 'lines': 'two', 'style': 'max-height: 180px; overflow-y: auto;'},
                                 'content': [
                                     item
                                     for row in list(reversed(history_rows))
