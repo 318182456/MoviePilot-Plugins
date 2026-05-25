@@ -559,7 +559,7 @@ class LocalSubDownloader(_PluginBase):
                         'class': f"px-4 border-bottom text-{subtitle_color} py-1"
                     },
                     'events': {
-                        'click': {
+                        'change': {
                             'api': 'plugin/LocalSubDownloader/toggle_video',
                             'method': 'post',
                             'params': {
@@ -711,7 +711,7 @@ class LocalSubDownloader(_PluginBase):
                                                     'color': 'secondary',
                                                     'block': True,
                                                     'prepend-icon': 'mdi-arrow-up',
-                                                    'disabled': not current_dir or current_dir == current_root
+                                                    'disabled': not current_dir or normalize_path(str(Path(current_dir).parent)) == normalize_path(current_dir)
                                                 },
                                                 'events': {
                                                     'click': {
@@ -1027,12 +1027,11 @@ class LocalSubDownloader(_PluginBase):
             
             path = Path(current_dir)
             parent_path = path.parent
-            root_path = self.get_current_root_path()
             
             norm_parent = normalize_path(parent_path)
-            norm_root = normalize_path(root_path)
-            if norm_root and not norm_parent.startswith(norm_root):
-                return {"code": 1, "message": "已到达当前所选根目录的最顶层，无法继续返回上一级"}
+            norm_current = normalize_path(path)
+            if norm_parent == norm_current:
+                return {"code": 1, "message": "已到达系统最顶层根目录，无法继续返回上一级"}
                 
             self.save_data("current_dir_path", norm_parent)
             self.add_log(f"📁 已返回上一级目录: {norm_parent}")
