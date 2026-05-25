@@ -474,6 +474,20 @@ class LocalSubDownloader(_PluginBase):
         # 实时从数据库加载最新已勾选的视频列表，确保多进程/多 Worker 下的状态渲染绝对一致，防范脏读
         self._selected_videos_cache = self.get_data("selected_videos") or []
 
+        # 实时获取 ASSRT 接口剩余额度，给用户极高透明度与贴心展示
+        assrt_quota_text = ""
+        if getattr(self, "_assrt_enabled", False) and getattr(self, "_assrt_token", ""):
+            try:
+                quota_url = f"https://api.assrt.net/v1/user/quota?token={self._assrt_token}"
+                res = self._http_get(quota_url)
+                if res and res.status_code == 200:
+                    data = res.json()
+                    if data.get("status") == 0:
+                        q_val = data.get("user", {}).get("quota", "未知")
+                        assrt_quota_text = f"ASSRT (伪射手) 今日剩余下载额度: {q_val} 次"
+            except Exception:
+                pass
+
         # 扫描当前浏览目录下的子目录与视频文件
         sub_dirs = []
         video_files = []
@@ -541,7 +555,7 @@ class LocalSubDownloader(_PluginBase):
                 ]
             })
 
-        # 2. 构造高颜值视频文件列表（每个视频项带有一键同步数据库的 VSwitch 切换开关，100% 绕开前端传参评估 Bug）
+        # 2. 构造高颜值、超紧凑视频文件列表（利用 VRow/VCol 列布局让开关靠右完美同行对齐，绝不换行拉伸）
         video_list_components = []
         if video_files:
             for v in video_files:
@@ -556,36 +570,72 @@ class LocalSubDownloader(_PluginBase):
                 if existing_subs:
                     sub_list_str = " / ".join(set(existing_subs))
                     status_text = f"✅ 已有字幕 ({sub_list_str})"
+                    status_color = "text-success"
                 else:
                     status_text = "❌ 无字幕"
+                    status_color = "text-grey"
                 
                 video_list_components.append({
                     'component': 'VListItem',
                     'props': {
-                        'prepend-icon': 'mdi-movie-open',
-                        'title': v.name,
-                        'subtitle': status_text,
-                        'class': 'py-2 px-1 border-bottom'
+                        'class': 'py-1 px-2 border-bottom',
+                        'density': 'compact',
+                        'style': 'background: transparent;'
                     },
-                    'content': [
-                        {
-                            'component': 'VSwitch',
-                            'props': {
-                                'model-value': is_checked,
-                                'color': 'primary',
-                                'density': 'compact',
-                                'hide-details': True,
-                                'class': 'ma-0 pa-0'
+                    'content': [{
+                        'component': 'VRow',
+                        'props': {'align': 'center', 'no-gutters': True, 'dense': True},
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 10, 'class': 'd-flex align-center overflow-hidden'},
+                                'content': [
+                                    {
+                                        'component': 'VIcon',
+                                        'props': {
+                                            'icon': 'mdi-movie-open',
+                                            'color': 'primary',
+                                            'class': 'mr-3',
+                                            'size': 'small'
+                                        }
+                                    },
+                                    {
+                                        'component': 'VListItem',
+                                        'props': {
+                                            'title': v.name,
+                                            'subtitle': status_text,
+                                            'density': 'compact',
+                                            'class': 'pa-0 ma-0 text-truncate',
+                                            'style': 'background: transparent; max-width: 90%;'
+                                        }
+                                    }
+                                ]
                             },
-                            'events': {
-                                'change': {
-                                    'api': 'plugin/LocalSubDownloader/toggle_video',
-                                    'method': 'post',
-                                    'params': {'video_path': v_path_str}
-                                }
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 2, 'class': 'text-right'},
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model-value': is_checked,
+                                            'color': 'primary',
+                                            'density': 'compact',
+                                            'hide-details': True,
+                                            'class': 'd-inline-flex align-center ma-0 pa-0'
+                                        },
+                                        'events': {
+                                            'change': {
+                                                'api': 'plugin/LocalSubDownloader/toggle_video',
+                                                'method': 'post',
+                                                'params': {'video_path': v_path_str}
+                                            }
+                                        }
+                                    }
+                                ]
                             }
-                        }
-                    ]
+                        ]
+                    }]
                 })
 
         # 根目录下拉组件数据源
@@ -720,6 +770,20 @@ class LocalSubDownloader(_PluginBase):
                         'component': 'VCardText',
                         'props': {'class': 'pa-3'},
                         'content': [
+                            # 额度提示信息（高颜值轻量化通告条）
+                            *(
+                                [{
+                                    'component': 'VAlert',
+                                    'props': {
+                                        'type': 'info',
+                                        'variant': 'tonal',
+                                        'density': 'compact',
+                                        'text': assrt_quota_text,
+                                        'class': 'mb-3'
+                                    }
+                                }]
+                                if assrt_quota_text else []
+                            ),
                             # 当前路径 + 返回按钮
                             {
                                 'component': 'VRow',
