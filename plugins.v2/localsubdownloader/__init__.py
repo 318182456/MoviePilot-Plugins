@@ -474,19 +474,28 @@ class LocalSubDownloader(_PluginBase):
         # 实时从数据库加载最新已勾选的视频列表，确保多进程/多 Worker 下的状态渲染绝对一致，防范脏读
         self._selected_videos_cache = self.get_data("selected_videos") or []
 
-        # 实时获取 ASSRT 接口剩余额度，给用户极高透明度与贴心展示
+        # 实时获取 ASSRT 接口剩余额度，给用户极高透明度与贴心展示（加入轻量缓存防卡顿）
+        import time
+        now = time.time()
+        last_quota_check = self.get_data("last_quota_check_time") or 0.0
+        cached_quota_text = self.get_data("cached_quota_text") or ""
+        
         assrt_quota_text = ""
         if getattr(self, "_assrt_enabled", False) and getattr(self, "_assrt_token", ""):
-            try:
-                quota_url = f"https://api.assrt.net/v1/user/quota?token={self._assrt_token}"
-                res = self._http_get(quota_url)
-                if res and res.status_code == 200:
-                    data = res.json()
-                    if data.get("status") == 0:
-                        q_val = data.get("user", {}).get("quota", "未知")
-                        assrt_quota_text = f"ASSRT (伪射手) 今日剩余下载额度: {q_val} 次"
-            except Exception:
-                pass
+            if now - last_quota_check > 120.0 or not cached_quota_text:
+                try:
+                    quota_url = f"https://api.assrt.net/v1/user/quota?token={self._assrt_token}"
+                    res = self._http_get(quota_url, timeout=1.5)
+                    if res and res.status_code == 200:
+                        data = res.json()
+                        if data.get("status") == 0:
+                            q_val = data.get("user", {}).get("quota", "未知")
+                            cached_quota_text = f"ASSRT (伪射手) 今日剩余下载额度: {q_val} 次"
+                            self.save_data("cached_quota_text", cached_quota_text)
+                            self.save_data("last_quota_check_time", now)
+                except Exception:
+                    pass
+            assrt_quota_text = cached_quota_text
 
         # 扫描当前浏览目录下的子目录与视频文件
         sub_dirs = []
