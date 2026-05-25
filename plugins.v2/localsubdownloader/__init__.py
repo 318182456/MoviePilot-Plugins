@@ -566,7 +566,7 @@ class LocalSubDownloader(_PluginBase):
                         'class': f"px-4 border-bottom text-{subtitle_color} py-1"
                     },
                     'events': {
-                        'change': {
+                        'click': {
                             'api': 'plugin/LocalSubDownloader/toggle_video',
                             'method': 'post',
                             'params': {
