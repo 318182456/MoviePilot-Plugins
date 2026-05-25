@@ -2012,12 +2012,30 @@ class LocalSubDownloader(_PluginBase):
             logger.debug(f"[LocalSubDownloader] 解析迅雷API响应失败: {e}")
             return False
 
+    def _assrt_http_get(self, url, headers=None):
+        """
+        专为 ASSRT API 接口设计的高速限流代理。
+        限制在最多 10次/分钟 (每 6 秒最多 1 次)，符合 ASSRT 限流额度规则。
+        由于该方法全在后台下载线程中执行，sleep 绝对不会阻塞前台网页，用户体验极速流畅！
+        """
+        if "api.assrt.net" in url:
+            import time
+            last_time = getattr(self, "_last_assrt_request_time", 0.0)
+            now = time.time()
+            elapsed = now - last_time
+            if elapsed < 6.0:
+                sleep_time = 6.0 - elapsed
+                self.add_log(f"⏳ [ASSRT 限流保护] 限制 10次/分钟 频次，后台挂起等待 {sleep_time:.2f} 秒...")
+                time.sleep(sleep_time)
+            self._last_assrt_request_time = time.time()
+        return self._http_get(url, headers=headers)
+
     def download_from_assrt(self, video_path: Path, existing_md5s: set) -> bool:
         # 优先通过 token 和 shooter hash 精准检索
         shooter_hash = self.compute_shooter_hash(video_path)
         if shooter_hash:
             url_hash = f"https://api.assrt.net/v1/sub/search?token={self._assrt_token}&filehash={shooter_hash}"
-            res = self._http_get(url_hash)
+            res = self._assrt_http_get(url_hash)
             if res and res.status_code == 200:
                 if res.text and res.text.strip() and (res.text.strip().startswith("[") or res.text.strip().startswith("{")):
                     try:
@@ -2041,7 +2059,7 @@ class LocalSubDownloader(_PluginBase):
             keyword = re.sub(r'\s*-\s*', ' ', keyword).strip()
 
         url_search = f"https://api.assrt.net/v1/sub/search?token={self._assrt_token}&q={urllib.parse.quote(keyword)}&cnt=15"
-        res = self._http_get(url_search)
+        res = self._assrt_http_get(url_search)
         if not res or res.status_code != 200:
             return False
 
@@ -2084,7 +2102,7 @@ class LocalSubDownloader(_PluginBase):
                 continue
 
             detail_url = f"https://api.assrt.net/v1/sub/detail?token={self._assrt_token}&id={sub_id}"
-            res = self._http_get(detail_url)
+            res = self._assrt_http_get(detail_url)
             if not res or res.status_code != 200:
                 self.add_log(f"🌐 [ASSRT] Detail接口请求失败 (id={sub_id}, status={getattr(res, 'status_code', 'N/A')})")
                 continue
