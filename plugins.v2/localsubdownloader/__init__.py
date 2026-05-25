@@ -791,6 +791,16 @@ class LocalSubDownloader(_PluginBase):
                                         'api': 'plugin/LocalSubDownloader/save_selected',
                                         'method': 'post',
                                         'params': {'selected': '{{selected_videos}}'}
+                                    },
+                                    'update:modelValue': {
+                                        'api': 'plugin/LocalSubDownloader/save_selected',
+                                        'method': 'post',
+                                        'params': {'selected': '{{selected_videos}}'}
+                                    },
+                                    'update:model-value': {
+                                        'api': 'plugin/LocalSubDownloader/save_selected',
+                                        'method': 'post',
+                                        'params': {'selected': '{{selected_videos}}'}
                                     }
                                 }
                             },
