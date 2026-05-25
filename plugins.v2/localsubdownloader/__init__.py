@@ -541,8 +541,8 @@ class LocalSubDownloader(_PluginBase):
                 ]
             })
 
-        # 2. 构造 VSelect 多选视频文件选项（不绑定 API 事件，避免页面刷新）
-        video_select_items = []
+        # 2. 构造高颜值视频文件列表（每个视频项带有一键同步数据库的 VSwitch 切换开关，100% 绕开前端传参评估 Bug）
+        video_list_components = []
         if video_files:
             for v in video_files:
                 existing_subs = []
@@ -550,14 +550,43 @@ class LocalSubDownloader(_PluginBase):
                     if sub_file.suffix.lower() in {'.srt', '.ass', '.vtt'}:
                         existing_subs.append(sub_file.suffix[1:].upper())
                 
+                v_path_str = normalize_path(str(v))
+                is_checked = v_path_str in self._selected_videos_cache
+                
                 if existing_subs:
                     sub_list_str = " / ".join(set(existing_subs))
-                    item_title = f"🎬 {v.name}   ✅ 已有字幕 ({sub_list_str})"
+                    status_text = f"✅ 已有字幕 ({sub_list_str})"
                 else:
-                    item_title = f"🎬 {v.name}   ❌ 无字幕"
+                    status_text = "❌ 无字幕"
                 
-                v_path_str = normalize_path(str(v))
-                video_select_items.append({"title": item_title, "value": v_path_str})
+                video_list_components.append({
+                    'component': 'VListItem',
+                    'props': {
+                        'prepend-icon': 'mdi-movie-open',
+                        'title': v.name,
+                        'subtitle': status_text,
+                        'class': 'py-2 px-1 border-bottom'
+                    },
+                    'content': [
+                        {
+                            'component': 'VSwitch',
+                            'props': {
+                                'model-value': is_checked,
+                                'color': 'primary',
+                                'density': 'compact',
+                                'hide-details': True,
+                                'class': 'ma-0 pa-0'
+                            },
+                            'events': {
+                                'change': {
+                                    'api': 'plugin/LocalSubDownloader/toggle_video',
+                                    'method': 'post',
+                                    'params': {'video_path': v_path_str}
+                                }
+                            }
+                        }
+                    ]
+                })
 
         # 根目录下拉组件数据源
         root_items = [{"title": f"📂 {p}", "value": str(p)} for p in root_paths]
@@ -769,41 +798,23 @@ class LocalSubDownloader(_PluginBase):
                                 }]
                                 if sub_dirs else []
                             ),
-                            # 视频文件多选
-                            {
-                                'component': 'VSelect',
-                                'props': {
-                                    'model': 'selected_videos',
-                                    'label': f'选择视频（共 {len(video_files)} 个）',
-                                    'items': video_select_items,
-                                    'multiple': True,
-                                    'chips': True,
-                                    'clearable': True,
-                                    'variant': 'outlined',
-                                    'density': 'comfortable',
-                                    'no-data-text': '当前目录下无视频文件',
-                                    'prepend-inner-icon': 'mdi-movie-open',
-                                    'class': 'mt-1 mb-1',
-                                    'hide-details': True
-                                },
-                                'events': {
-                                    'change': {
-                                        'api': 'plugin/LocalSubDownloader/save_selected',
-                                        'method': 'post',
-                                        'params': {'selected': '{{selected_videos}}'}
+                            # 视频文件列表组件（高颜值、一键同步开关，绝不丢失勾选状态）
+                            *(
+                                [{
+                                    'component': 'VCard',
+                                    'props': {
+                                        'variant': 'flat',
+                                        'style': 'max-height: 320px; overflow-y: auto; border: 1px solid rgba(0,0,0,0.12); border-radius: 4px;',
+                                        'class': 'mb-3 pa-1'
                                     },
-                                    'update:modelValue': {
-                                        'api': 'plugin/LocalSubDownloader/save_selected',
-                                        'method': 'post',
-                                        'params': {'selected': '{{selected_videos}}'}
-                                    },
-                                    'update:model-value': {
-                                        'api': 'plugin/LocalSubDownloader/save_selected',
-                                        'method': 'post',
-                                        'params': {'selected': '{{selected_videos}}'}
-                                    }
-                                }
-                            },
+                                    'content': [{
+                                        'component': 'VList',
+                                        'props': {'density': 'comfortable', 'lines': 'two'},
+                                        'content': video_list_components
+                                    }]
+                                }]
+                                if video_list_components else []
+                            ),
                             *video_action_component
                         ]
                     }
