@@ -217,6 +217,42 @@ class LocalSubDownloader(_PluginBase):
         except Exception:
             return []
 
+    def get_video_embedded_subs(self, video_path: Path) -> List[str]:
+        """
+        带缓存地获取视频内置字幕，以 mtime 和 size 进行校验。
+        """
+        video_path_str = normalize_path(str(video_path))
+        try:
+            stat = video_path.stat()
+            mtime = stat.st_mtime
+            size = stat.st_size
+        except Exception:
+            return []
+
+        try:
+            cache = self.get_data("embedded_subs_cache") or {}
+        except Exception:
+            cache = {}
+            
+        cache_entry = cache.get(video_path_str)
+        if cache_entry and cache_entry.get("mtime") == mtime and cache_entry.get("size") == size:
+            return cache_entry.get("subs", [])
+
+        # 缓存未命中，调用 ffprobe 获取
+        subs = self.get_embedded_subtitles(video_path)
+        
+        # 更新缓存
+        cache[video_path_str] = {
+            "mtime": mtime,
+            "size": size,
+            "subs": subs
+        }
+        try:
+            self.save_data("embedded_subs_cache", cache)
+        except Exception:
+            pass
+        return subs
+
     @staticmethod
     def get_command() -> List[Dict[str, Any]]:
         """
@@ -594,7 +630,7 @@ class LocalSubDownloader(_PluginBase):
                         existing_subs.append(sub_file.suffix[1:].upper())
                 
                 # 检测内置/内挂字幕
-                embedded_subs = self.get_embedded_subtitles(v)
+                embedded_subs = self.get_video_embedded_subs(v)
                 
                 v_path_str = normalize_path(str(v))
                 is_selected = v_path_str in selected_videos
@@ -1055,7 +1091,7 @@ class LocalSubDownloader(_PluginBase):
                                 
                     # 检查内置/内挂字幕是否包含中文
                     if not has_chinese_sub:
-                        embedded_subs = self.get_embedded_subtitles(file_path)
+                        embedded_subs = self.get_video_embedded_subs(file_path)
                         for emb in embedded_subs:
                             emb_lower = emb.lower()
                             if any(kw in emb_lower for kw in chinese_keywords):
@@ -1674,7 +1710,7 @@ class LocalSubDownloader(_PluginBase):
                     pass
 
         # 检测内置/内挂字幕
-        embedded_subs = self.get_embedded_subtitles(video_path)
+        embedded_subs = self.get_video_embedded_subs(video_path)
 
         if existing_sub_names or embedded_subs:
             log_msg = "📂 检测到已有字幕："
