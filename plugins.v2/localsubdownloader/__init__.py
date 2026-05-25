@@ -625,15 +625,38 @@ class LocalSubDownloader(_PluginBase):
             video_action_component = [
                 {
                     'component': 'VRow',
-                    'props': {'class': 'mt-2 justify-end', 'dense': True},
+                    'props': {'class': 'mt-2', 'dense': True},
                     'content': [
                         {
                             'component': 'VCol',
-                            'props': {'cols': 12},
+                            'props': {'cols': 12, 'sm': 6},
                             'content': [
                                 {
                                     'component': 'VBtn',
-                                    'text': '⚡ 整理当前目录全部视频',
+                                    'text': '⚡ 整理选中视频',
+                                    'props': {
+                                        'color': 'success',
+                                        'variant': 'elevated',
+                                        'block': True,
+                                        'size': 'default',
+                                        'prepend-icon': 'mdi-play-selection'
+                                    },
+                                    'events': {
+                                        'click': {
+                                            'api': 'plugin/LocalSubDownloader/run_selected',
+                                            'method': 'post'
+                                        }
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            'component': 'VCol',
+                            'props': {'cols': 12, 'sm': 6},
+                            'content': [
+                                {
+                                    'component': 'VBtn',
+                                    'text': '⚡ 整理当前目录全部',
                                     'props': {
                                         'color': 'primary',
                                         'variant': 'outlined',
@@ -792,11 +815,11 @@ class LocalSubDownloader(_PluginBase):
                                 },
                                 'events': {
                                     'change': {
-                                        'api': 'plugin/LocalSubDownloader/run_selected',
+                                        'api': 'plugin/LocalSubDownloader/save_selected',
                                         'method': 'post'
                                     },
                                     'update:modelValue': {
-                                        'api': 'plugin/LocalSubDownloader/run_selected',
+                                        'api': 'plugin/LocalSubDownloader/save_selected',
                                         'method': 'post'
                                     }
                                 }
@@ -1119,6 +1142,7 @@ class LocalSubDownloader(_PluginBase):
 
             # 统一做 normalize_path 规整化
             self._selected_videos_cache = [normalize_path(p) for p in selected_list if p]
+            self.save_data("selected_videos", self._selected_videos_cache)
             logger.info(f"[LocalSubDownloader] 联动保存视频多选缓存: 已选择 {len(self._selected_videos_cache)} 个视频")
             return {"code": 0, "message": "已成功同步多选状态"}
         except Exception as e:
