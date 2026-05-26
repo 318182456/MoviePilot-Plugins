@@ -986,13 +986,11 @@ class LocalSubDownloader(_PluginBase):
                                                         'events': {
                                                             'change': {
                                                                 'api': 'plugin/LocalSubDownloader/change_sort',
-                                                                'method': 'post',
-                                                                'params': {'sort_by': '{{value}}'}
+                                                                'method': 'post'
                                                             },
                                                             'update:modelValue': {
                                                                 'api': 'plugin/LocalSubDownloader/change_sort',
-                                                                'method': 'post',
-                                                                'params': {'sort_by': '{{value}}'}
+                                                                'method': 'post'
                                                             }
                                                         }
                                                     }
