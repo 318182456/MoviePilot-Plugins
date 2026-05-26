@@ -173,13 +173,19 @@ class LocalSubDownloader(_PluginBase):
             self._shooter_enabled = config.get("shooter_enabled", True)
             self._xunlei_enabled = config.get("xunlei_enabled", True)
             self._assrt_enabled = config.get("assrt_enabled", False)
-            self._assrt_token = config.get("assrt_token", "").strip()
+            self._assrt_token = (config.get("assrt_token") or "").strip()
             self._subdl_enabled = config.get("subdl_enabled", False)
-            self._subdl_api_key = config.get("subdl_api_key", "").strip()
+            self._subdl_api_key = (config.get("subdl_api_key") or "").strip()
             try:
                 self._auto_download_delay = int(config.get("auto_download_delay", 30))
             except Exception:
                 self._auto_download_delay = 30
+            # 排序方式和名称筛选也支持通过配置页设置（保存到 DB，控制台加载读取）
+            sort_by = config.get("sort_by") or ""
+            if sort_by in ("name", "time"):
+                self.save_data("sort_by", sort_by)
+            name_filter = (config.get("name_filter") or "").strip()
+            self.save_data("name_filter", name_filter)
 
         # 初始化加载持久化日志、历史与选定视频缓存到内存，确保双保险
         try:
@@ -547,6 +553,45 @@ class LocalSubDownloader(_PluginBase):
                                 ]
                             }
                         ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 4},
+                                'content': [
+                                    {
+                                        'component': 'VSelect',
+                                        'props': {
+                                            'model': 'sort_by',
+                                            'label': '🔀 控制台文件排序方式',
+                                            'items': [
+                                                {'title': '🔤 按名称排序', 'value': 'name'},
+                                                {'title': '📅 按修改时间排序', 'value': 'time'}
+                                            ],
+                                            'hint': '控制台文件列表排列顺序，保存后生效'
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 8},
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'name_filter',
+                                            'label': '🔍 控制台名称过滤关键字',
+                                            'placeholder': '输入关键字过滤控制台文件列表，不区分大小写，保存后生效',
+                                            'clearable': True,
+                                            'hint': '置空则不过滤，保存后生效'
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
                     }
                 ]
             }
@@ -559,7 +604,9 @@ class LocalSubDownloader(_PluginBase):
             "assrt_token": "",
             "subdl_enabled": False,
             "subdl_api_key": "",
-            "auto_download_delay": 30
+            "auto_download_delay": 30,
+            "sort_by": "name",
+            "name_filter": ""
         }
 
     def get_state(self) -> bool:
@@ -620,6 +667,9 @@ class LocalSubDownloader(_PluginBase):
         name_filter_lower = name_filter.lower().strip()
 
         # 扫描当前浏览目录下的子目录与视频文件
+        # 第一步：全量扫描，用于生成过滤候选词（autocomplete items）
+        all_dir_names = []
+        all_video_names = []
         sub_dirs = []
         video_files = []
         video_extensions = {'.mp4', '.mkv', '.avi', '.ts', '.wmv', '.mov', '.flv', '.rmvb'}
@@ -634,10 +684,12 @@ class LocalSubDownloader(_PluginBase):
                         if item.name in ("@eaDir", "#recycle", "@tmp"):
                             continue
                         if item.is_dir():
+                            all_dir_names.append(item.name)
                             if name_filter_lower and name_filter_lower not in item.name.lower():
                                 continue
                             sub_dirs.append(item.name)
                         elif item.is_file() and item.suffix.lower() in video_extensions:
+                            all_video_names.append(item.stem)  # 文件名（去扩展名）
                             if name_filter_lower and name_filter_lower not in item.name.lower():
                                 continue
                             video_files.append(item)
@@ -645,14 +697,13 @@ class LocalSubDownloader(_PluginBase):
                     logger.error(f"[LocalSubDownloader] 扫描目录 {current_dir} 失败: {e}")
 
             if sort_by == "time":
-                # 按修改时间排序（最新在前）
                 def get_dir_mtime(d_name):
                     try:
                         return (c_path / d_name).stat().st_mtime
                     except Exception:
                         return 0
                 sub_dirs.sort(key=get_dir_mtime, reverse=True)
-                
+
                 def get_file_mtime(f_path):
                     try:
                         return f_path.stat().st_mtime
@@ -660,9 +711,190 @@ class LocalSubDownloader(_PluginBase):
                         return 0
                 video_files.sort(key=get_file_mtime, reverse=True)
             else:
-                # 默认按名称排序
                 sub_dirs.sort()
                 video_files.sort(key=lambda x: x.name)
+
+        # 高智商抽取当前目录下的过滤关键字标签 (Filter Chips)
+        import re
+        filter_chips = set()
+        exclude_words = {
+            '1080p', '2160p', '4k', '720p', 'h264', 'x264', 'h265', 'x265', 'hevc', 'mp4', 'mkv', 
+            'web-dl', 'webdl', 'bluray', 'chs', 'cht', 'eng', 'chs&eng', 'aac', 'dd5.1', 'dts',
+            'sub', 'multi-sub', 'multi', 'uncut', 'rip', 'remux', 'atmos', 'hdr', '10bit', 'sp', 'ova'
+        }
+        
+        # 1) 从子目录名提取
+        for d in all_dir_names:
+            if 2 <= len(d) <= 15:
+                filter_chips.add(d.strip())
+            for p in re.split(r'[\s\.\-\_\,\/\\]+', d):
+                p_clean = p.strip()
+                if len(p_clean) >= 2 and p_clean.lower() not in exclude_words and not p_clean.isdigit():
+                    filter_chips.add(p_clean)
+
+        # 2) 从视频无后缀文件名提取
+        for v in all_video_names:
+            # 提取中文
+            for part in re.findall(r'[\u4e00-\u9fa5]+', v):
+                if len(part) >= 2:
+                    filter_chips.add(part)
+            # 提取括号内的内容
+            for part in re.findall(r'[\[\(\【\（](.*?)[\]\)\】\）]', v):
+                part_clean = part.strip()
+                if 2 <= len(part_clean) <= 12 and not part_clean.isdigit() and part_clean.lower() not in exclude_words:
+                    filter_chips.add(part_clean)
+            # 去除括号内容后分词
+            clean_v = re.sub(r'[\[\(\【\（].*?[\]\)\】\）]', ' ', v)
+            for w in re.split(r'[\s\.\-\_\,\/\\]+', clean_v):
+                w_clean = w.strip()
+                if 2 <= len(w_clean) <= 15 and not w_clean.isdigit() and w_clean.lower() not in exclude_words:
+                    filter_chips.add(w_clean)
+
+        # 100% 完备覆盖但极致精简去重，彻底清洗掉所有 4 位数年份日期 (如 1999) 和纯数字废词
+        all_candidates = set()
+        
+        exclude_words = {
+            '1080p', '2160p', '4k', '720p', 'h264', 'x264', 'h265', 'x265', 'hevc', 'mp4', 'mkv', 
+            'web-dl', 'webdl', 'bluray', 'chs', 'cht', 'eng', 'chs&eng', 'aac', 'dd5.1', 'dts',
+            'sub', 'multi-sub', 'multi', 'uncut', 'rip', 'remux', 'atmos', 'hdr', '10bit', 'sp', 'ova'
+        }
+        
+        def clean_title_name(name: str) -> str:
+            # 1. 彻底砍掉各种括号内的 4 位数年份日期 (如 (1999), [2006], 【2012】 等)
+            cleaned = re.sub(r'\s*[\(\[\\【\\（]\d{4}[\)\]\\】\\）].*', '', name)
+            # 2. 彻底清洗类似 (05-25 13:50) 这类临时修改时间括号
+            cleaned = re.sub(r'\s*\(\d{2}-\d{2}\s+\d{2}:\d{2}\).*', '', cleaned)
+            cleaned = cleaned.strip()
+            
+            # 3. 高智商提取系列片/副标题核心词前缀并融合成唯一词
+            # a) 砍掉中文冒号和英文冒号后面的副标题 (如 小森林：冬春篇 -> 小森林, 异形：契约 -> 异形)
+            cleaned = re.split(r'[:：]', cleaned)[0].strip()
+            # b) 砍掉“大战”后面的内容 (如 异形大战铁血战士 -> 异形)
+            cleaned = re.split(r'大战', cleaned)[0].strip()
+            # c) 砍掉末尾的阿拉伯数字代数 (如 异形2 -> 异形, 指环王1 -> 指环王)
+            cleaned = re.sub(r'\d+$', '', cleaned).strip()
+            # d) 砍掉末尾的罗马数字 (如 异形 II -> 异形)
+            cleaned = re.sub(r'\s+[I|V|X|v|x]+$', '', cleaned).strip()
+            # e) 砍掉“的故事”、“物语”等常见影片派生后缀 (如 忠犬八公的故事/物语 -> 忠犬八公)
+            cleaned = re.sub(r'(的故事|物语)$', '', cleaned).strip()
+            
+            # f) 智能裁切中文连词“与”、“之”、“及”（仅限左侧词长度 >= 3 时，防范误伤如 “风之谷” 或 “巨蟒与圣杯”）
+            for conjunction in ('与', '之', '及'):
+                if conjunction in cleaned:
+                    parts = cleaned.split(conjunction)
+                    # 检查左侧主干词的长度是否大于等于 3，确保长特异片名融合，且短片名安全
+                    if len(parts[0].strip()) >= 3:
+                        cleaned = parts[0].strip()
+                        break
+            
+            return cleaned
+
+        # 1) 分词出来的词汇过滤日期
+        for c in filter_chips:
+            if c.isdigit() and len(c) == 4:
+                continue
+            if c.lower() in exclude_words:
+                continue
+            c_clean = clean_title_name(c)
+            if c_clean.isdigit() and len(c_clean) == 4:
+                continue
+            if len(c_clean) >= 2:
+                all_candidates.add(c_clean)
+
+        # 2) 所有子目录名提取并清洗年份
+        for d in all_dir_names:
+            c_clean = clean_title_name(d)
+            if c_clean.isdigit() and len(c_clean) == 4:
+                continue
+            if len(c_clean) >= 2:
+                all_candidates.add(c_clean)
+                
+        # 3) 所有视频名提取并清洗年份
+        for v in all_video_names:
+            c_clean = clean_title_name(v)
+            if c_clean.isdigit() and len(c_clean) == 4:
+                continue
+            if len(c_clean) >= 2:
+                all_candidates.add(c_clean)
+                
+        # 4) 已激活过滤词兜底
+        if name_filter:
+            c_clean = clean_title_name(name_filter)
+            if c_clean:
+                all_candidates.add(c_clean)
+
+        # 智能提取相邻同开头词的最大公共前缀并融合
+        final_unique_candidates = set()
+        temp_list = sorted(list(all_candidates))
+        
+        mapping = {item: item for item in temp_list}
+        for i in range(len(temp_list) - 1):
+            s1 = temp_list[i]
+            s2 = temp_list[i + 1]
+            
+            # 提取公共前缀
+            common = []
+            for c1, c2 in zip(s1, s2):
+                if c1 == c2:
+                    common.append(c1)
+                else:
+                    break
+            prefix = "".join(common).strip()
+            # 清洗前缀末尾的标点符号、空格、代数或罗马数字
+            prefix = re.sub(r'[:：·\-\_\s\d\+]+$', '', prefix).strip()
+            prefix = re.sub(r'\s+[I|V|X|v|x]+$', '', prefix).strip()
+            
+            # 字数门槛自适应
+            has_chinese_prefix = any('\u4e00' <= char <= '\u9fa5' for char in prefix)
+            min_len = 2 if has_chinese_prefix else 4
+            if len(prefix) >= min_len:
+                old_val1 = mapping[s1]
+                old_val2 = mapping[s2]
+                for k, v in mapping.items():
+                    if v == old_val1 or v == old_val2:
+                        mapping[k] = prefix
+                        
+        for item in temp_list:
+            final_unique_candidates.add(mapping[item])
+
+        chips_list = sorted(list(final_unique_candidates))
+        def chip_sort_key(c):
+            if not c:
+                return (2, 0, b'')
+                
+            # 1. 提取首字数字数值
+            val = None
+            m = re.match(r'^(\d+)', c)
+            if m:
+                val = float(m.group(1))
+            else:
+                first_char = c[0]
+                cn_nums = {
+                    '零': 0, '一': 1, '壹': 1, '二': 2, '两': 2, '贰': 2,
+                    '三': 3, '叁': 3, '四': 4, '肆': 4, '五': 5, '伍': 5,
+                    '六': 6, '陆': 6, '七': 7, '柒': 7, '八': 8, '捌': 8,
+                    '九': 9, '玖': 9, '十': 10, '拾': 10, '百': 100, '千': 1000, '万': 10000
+                }
+                val = cn_nums.get(first_char, None)
+            
+            has_chinese = any('\u4e00' <= char <= '\u9fa5' for char in c)
+            
+            # 使用三元组排序：类别(0/1/2) -> 数字大小 -> 拼音字母序(GBK)
+            if val is not None:
+                try:
+                    gbk_bytes = c.encode('gbk', errors='ignore')
+                except Exception:
+                    gbk_bytes = c.encode('utf-8', errors='ignore')
+                return (0, val, gbk_bytes)
+            elif has_chinese:
+                try:
+                    gbk_bytes = c.encode('gbk', errors='ignore')
+                except Exception:
+                    gbk_bytes = c.encode('utf-8', errors='ignore')
+                return (1, 0, gbk_bytes)
+            else:
+                return (2, 0, c.lower().encode('utf-8', errors='ignore'))
+        chips_list.sort(key=chip_sort_key)
 
         # 1. 完整定义子目录按钮磁贴列表
         sub_dir_details = []
@@ -976,21 +1208,21 @@ class LocalSubDownloader(_PluginBase):
                                             }
                                         ]
                                     },
-                                    # 排序与筛选控制行
+                                    # 排序控制行（还原为好用的第一版 VSelect 下拉框）
                                     {
                                         'component': 'VRow',
-                                        'props': {'class': 'mb-2 align-center', 'dense': True},
+                                        'props': {'class': 'mb-3', 'dense': True},
                                         'content': [
                                             {
                                                 'component': 'VCol',
-                                                'props': {'cols': 12, 'md': 4},
+                                                'props': {'cols': 12},
                                                 'content': [
                                                     {
-                                                        'component': 'VSelect',
+                                                        'component': 'VAutocomplete',
                                                         'props': {
-                                                            'model-value': sort_by,
+                                                            
                                                             'model': 'sort_by',
-                                                            'label': '🔀 排序方式',
+                                                            'label': '🔀 控制台文件排序方式',
                                                             'items': [
                                                                 {'title': '🔤 按名称排序', 'value': 'name'},
                                                                 {'title': '📅 按修改时间排序', 'value': 'time'}
@@ -1008,45 +1240,122 @@ class LocalSubDownloader(_PluginBase):
                                                         }
                                                     }
                                                 ]
-                                            },
-                                             {
-                                                 'component': 'VCol',
-                                                 'props': {'cols': 12, 'md': 8},
-                                                 'content': [
-                                                     {
-                                                         'component': 'VTextField',
+                                            }
+                                        ]
+                                    },
+                                    # 竖向滚动过滤标签池组件（物理参数 100% 精准过滤，绝不遗漏任何文件夹，界面极简）
+                                    {
+                                        'component': 'VRow',
+                                        'props': {'class': 'mb-1', 'dense': True},
+                                        'content': [
+                                            {
+                                                'component': 'VCol',
+                                                'props': {'cols': 12},
+                                                'content': [
+                                                    # 提示与状态条
+                                                    {
+                                                        'component': 'VAutocomplete',
                                                          'props': {
                                                              'model': 'name_filter',
-                                                             'label': f'🔍 名称筛选 (当前: {name_filter})' if name_filter else '🔍 名称筛选',
-                                                             'placeholder': '输入关键字并回车进行过滤',
+                                                             'label': '🏷️ 纯前端过滤标签：输入搜索，点击选中立即过滤文件',
+                                                             'items': chips_list,
                                                              'variant': 'outlined',
-                                                             'density': 'compact',
+                                                             'density': 'comfortable',
                                                              'clearable': True,
-                                                             'hide-details': True,
-                                                             'prepend-inner-icon': 'mdi-magnify'
+                                                             'prepend-inner-icon': 'mdi-tag-search-outline',
+                                                             'class': 'mb-2'
                                                          },
                                                          'events': {
                                                              'change': {
                                                                  'api': 'plugin/LocalSubDownloader/change_filter',
                                                                  'method': 'post',
                                                                  'params': {'name_filter': '{{name_filter}}'}
-                                                             },
-                                                             'click:clear': {
-                                                                 'api': 'plugin/LocalSubDownloader/change_filter',
-                                                                 'method': 'post',
-                                                                 'params': {'name_filter': ''}
                                                              }
                                                          }
-                                                     }
-                                                 ]
-                                             }
+                                                     },
+                                                     # 提示与状态条
+                                                     {
+                                                         'component': 'VListItem',
+                                                        'props': {
+                                                            'title': f"🔍 当前已过滤: 「{name_filter}」 (可在下方滚动选择箱内更改/清空)" if name_filter else "💡 提示：在下方滚动选择箱内点击分类标签可一键过滤文件",
+                                                            'class': 'text-caption text-grey pa-0 min-height-0 mb-1'
+                                                        }
+                                                    },
+                                                    # 100px 高度精美竖向滚动标签池，自适应明暗色主题边框与背景
+                                                    {
+                                                        'component': 'VRow',
+                                                        'props': {
+                                                            'class': 'ma-0 pa-2 overflow-y-auto align-content-start',
+                                                            'style': 'max-height: 100px; overflow-y: auto; overflow-x: hidden; border: 1px solid rgba(var(--v-border-color), 0.25); border-radius: 6px; background-color: rgba(var(--v-theme-surface), 0.5);'
+                                                        },
+                                                        'content': [
+                                                            # 1) 一键清除过滤胶囊 (置于首位)
+                                                            *([
+                                                                {
+                                                                    'component': 'VCol',
+                                                                    'props': {'cols': 'auto', 'class': 'pa-1'},
+                                                                    'content': [{
+                                                                        'component': 'VBtn',
+                                                                        'text': f"❌ 清除过滤: {name_filter}",
+                                                                        'props': {
+                                                                            'color': 'error',
+                                                                            'variant': 'flat',
+                                                                            'size': 'small',
+                                                                            'density': 'comfortable',
+                                                                            'class': 'text-none rounded-pill'
+                                                                        },
+                                                                        'events': {
+                                                                            'click': {
+                                                                                'api': 'plugin/LocalSubDownloader/change_filter',
+                                                                                'method': 'post',
+                                                                                'params': {'name_filter': ''}
+                                                                            }
+                                                                        }
+                                                                    }]
+                                                                }
+                                                            ] if name_filter else []),
+                                                            # 2) 罗列全量所有的过滤关键字胶囊，100% 完备无遗漏
+                                                            *(
+                                                                [{
+                                                                    'component': 'VCol',
+                                                                    'props': {'cols': 'auto', 'class': 'pa-1'},
+                                                                    'content': [{
+                                                                        'component': 'VBtn',
+                                                                        'text': f"🏷️ {chip_val}",
+                                                                        'props': {
+                                                                            'color': 'primary' if name_filter == chip_val else 'info',
+                                                                            'variant': 'flat' if name_filter == chip_val else 'tonal',
+                                                                            'size': 'small',
+                                                                            'density': 'comfortable',
+                                                                            'class': 'text-none rounded-pill'
+                                                                        },
+                                                                        'events': {
+                                                                            'click': {
+                                                                                'api': 'plugin/LocalSubDownloader/change_filter',
+                                                                                'method': 'post',
+                                                                                'params': {'name_filter': chip_val}
+                                                                            }
+                                                                        }
+                                                                    }]
+                                                                } for chip_val in chips_list]
+                                                                if chips_list else [{
+                                                                    'component': 'VCol',
+                                                                    'props': {'cols': 12},
+                                                                    'text': '（当前目录下无可选过滤标签）',
+                                                                    'class': 'text-caption text-grey text-center py-2'
+                                                                }]
+                                                            )
+                                                        ]
+                                                    }
+                                                ]
+                                            }
                                         ]
                                     },
-                                    # 子目录磁贴按钮（硬编码 params，稳定可靠）
+                                    # 子目录磁贴按鈕（硬编码 params，稳定可靠）
                                     *(
                                         [{
                                             'component': 'VRow',
-                                            'props': {'dense': True, 'class': 'mb-2', 'style': 'max-height:120px;overflow-y:auto;'},
+                                            'props': {'dense': True, 'class': 'mb-2', 'style': 'max-height:80px;overflow-y:auto;'},
                                             'content': [
                                                 {
                                                     'component': 'VCol',
@@ -1083,7 +1392,7 @@ class LocalSubDownloader(_PluginBase):
                                             'props': {
                                                 'variant': 'flat',
                                                 'class': 'border rounded-lg mb-2',
-                                                'style': 'max-height: 250px; overflow-y: auto;'
+                                                'style': 'max-height: 100px; overflow-y: auto;'
                                             },
                                             'content': [
                                                 {
@@ -1119,7 +1428,7 @@ class LocalSubDownloader(_PluginBase):
                         'content': (
                             [{
                                 'component': 'VList',
-                                'props': {'density': 'compact', 'lines': 'two', 'style': 'max-height: 180px; overflow-y: auto;'},
+                                'props': {'density': 'compact', 'lines': 'two', 'style': 'max-height: 100px; overflow-y: auto;'},
                                 'content': [
                                     item
                                     for row in list(reversed(history_rows))
@@ -1570,16 +1879,22 @@ class LocalSubDownloader(_PluginBase):
 
     async def api_change_sort(self, request: Request) -> Any:
         """
-        前台 POST 请求调用的端点：切换当前目录排列方式 (名称/时间)
+        前台 POST 请求调用的端点：切换当前目录排列方式 (name/time)
+        VSelect change 事件会正确传递选中值，直接读取；兜底 toggle 保证不出错。
         """
         try:
             body = await get_request_params(request)
-            sort_by = body.get("sort_by") or "name"
-            if sort_by not in ("name", "time"):
-                sort_by = "name"
+            sort_by = body.get("sort_by") or ""
+            # VSelect / VAutocomplete 传参成功时直接使用；未替换模板占位符时进行智能 toggle 反转
+            if sort_by in ("name", "time"):
+                pass
+            else:
+                current = self.get_data("sort_by") or "name"
+                sort_by = "time" if current == "name" else "name"
             self.save_data("sort_by", sort_by)
-            self.add_log(f"↕️ 排序方式已切换为: {'按修改时间' if sort_by == 'time' else '按名称'}")
-            return {"code": 0, "message": f"排序方式已切换为: {'按修改时间' if sort_by == 'time' else '按名称'}"}
+            label = "按修改时间" if sort_by == "time" else "按名称"
+            self.add_log(f"↕️ 排序方式已切换为: {label}")
+            return {"code": 0, "message": f"排序方式已切换为: {label}"}
         except Exception as e:
             return {"code": 1, "message": f"切换排序失败: {e}"}
 
@@ -1589,11 +1904,15 @@ class LocalSubDownloader(_PluginBase):
         """
         try:
             body = await get_request_params(request)
+            logger.info(f"[LocalSubDownloader] api_change_filter body: {body}")
             name_filter = body.get("name_filter") or ""
-            if name_filter == "{{name_filter}}":
-                name_filter = ""
-            self.save_data("name_filter", name_filter)
-            return {"code": 0, "message": "名称筛选已更新"}
+            # 过滤未替换的模板占位符（框架未替换时保持现有过滤不变）
+            if "{{" in name_filter:
+                logger.warning(f"[LocalSubDownloader] 收到未替换的模板占位符: {name_filter}，保持现有过滤不变")
+                return {"code": 0, "message": "过滤保持不变"}
+            self.save_data("name_filter", name_filter.strip())
+            logger.info(f"[LocalSubDownloader] 名称筛选已更新为: {repr(name_filter.strip())}")
+            return {"code": 0, "message": f"名称筛选已更新: {name_filter.strip() or '(已清空)'}"}
         except Exception as e:
             return {"code": 1, "message": f"切换筛选失败: {e}"}
 
