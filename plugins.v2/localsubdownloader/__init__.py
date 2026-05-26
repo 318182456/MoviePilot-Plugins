@@ -960,56 +960,34 @@ class LocalSubDownloader(_PluginBase):
                                             }
                                         ]
                                     },
-                                    # 排序控制行 (使用双按钮高亮切换，完美解决前端无法动态解析占位符的传参限制，且更具现代美感)
+                                    # 排序控制行
                                     {
                                         'component': 'VRow',
                                         'props': {'class': 'mb-2 align-center', 'dense': True},
                                         'content': [
                                             {
                                                 'component': 'VCol',
-                                                'props': {'cols': 6, 'sm': 3},
+                                                'props': {'cols': 12, 'md': 4},
                                                 'content': [
                                                     {
-                                                        'component': 'VBtn',
-                                                        'text': '🔤 按名称排序',
+                                                        'component': 'VSelect',
                                                         'props': {
-                                                            'variant': 'flat' if sort_by == 'name' else 'outlined',
-                                                            'color': 'primary' if sort_by == 'name' else 'default',
-                                                            'block': True,
-                                                            'density': 'comfortable',
-                                                            'size': 'small',
-                                                            'prepend-icon': 'mdi-alpha-n-box-outline'
+                                                            'model-value': sort_by,
+                                                            'model': 'sort_by',
+                                                            'label': '🔀 排序方式',
+                                                            'items': [
+                                                                {'title': '🔤 按名称排序', 'value': 'name'},
+                                                                {'title': '📅 按修改时间排序', 'value': 'time'}
+                                                            ],
+                                                            'variant': 'outlined',
+                                                            'density': 'compact',
+                                                            'hide-details': True
                                                         },
                                                         'events': {
-                                                            'click': {
+                                                            'update:modelValue': {
                                                                 'api': 'plugin/LocalSubDownloader/change_sort',
                                                                 'method': 'post',
-                                                                'params': {'sort_by': 'name'}
-                                                            }
-                                                        }
-                                                    }
-                                                ]
-                                            },
-                                            {
-                                                'component': 'VCol',
-                                                'props': {'cols': 6, 'sm': 3},
-                                                'content': [
-                                                    {
-                                                        'component': 'VBtn',
-                                                        'text': '📅 按时间排序',
-                                                        'props': {
-                                                            'variant': 'flat' if sort_by == 'time' else 'outlined',
-                                                            'color': 'primary' if sort_by == 'time' else 'default',
-                                                            'block': True,
-                                                            'density': 'comfortable',
-                                                            'size': 'small',
-                                                            'prepend-icon': 'mdi-clock-outline'
-                                                        },
-                                                        'events': {
-                                                            'click': {
-                                                                'api': 'plugin/LocalSubDownloader/change_sort',
-                                                                'method': 'post',
-                                                                'params': {'sort_by': 'time'}
+                                                                'params': {'sort_by': '{{value}}'}
                                                             }
                                                         }
                                                     }
