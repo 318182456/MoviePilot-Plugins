@@ -972,7 +972,7 @@ class LocalSubDownloader(_PluginBase):
                                                     {
                                                         'component': 'VSelect',
                                                         'props': {
-                                                            'model-value': sort_by,
+                                                            'value': sort_by,
                                                             'model': 'sort_by',
                                                             'label': '🔀 排序方式',
                                                             'items': [
