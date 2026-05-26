@@ -1572,9 +1572,15 @@ class LocalSubDownloader(_PluginBase):
         """
         try:
             body = await get_request_params(request)
-            sort_by = body.get("sort_by") or "name"
+            sort_by = body.get("sort_by") or ""
+            
+            # 智能提取与兜底，防止前端模板变量未解析直接发送
+            if not sort_by or "{{" in sort_by:
+                sort_by = body.get("value") or "name"
+                
             if sort_by not in ("name", "time"):
                 sort_by = "name"
+                
             self.save_data("sort_by", sort_by)
             self.add_log(f"↕️ 排序方式已切换为: {'按修改时间' if sort_by == 'time' else '按名称'}")
             return {"code": 0, "message": f"排序方式已切换为: {'按修改时间' if sort_by == 'time' else '按名称'}"}
