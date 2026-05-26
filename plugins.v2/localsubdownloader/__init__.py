@@ -783,6 +783,7 @@ class LocalSubDownloader(_PluginBase):
         if sub_dirs:
             dir_navigation.append({
                 'component': 'VRow',
+                'props': {'class': 'mb-2', 'dense': True},
                 'content': [
                     {
                         'component': 'VCol',
@@ -797,10 +798,16 @@ class LocalSubDownloader(_PluginBase):
                                     'variant': 'outlined',
                                     'density': 'comfortable',
                                     'clearable': True,
-                                    'prepend-inner-icon': 'mdi-folder-search'
+                                    'prepend-inner-icon': 'mdi-folder-search',
+                                    'hide-details': True
                                 },
                                 'events': {
                                     'change': {
+                                        'api': 'plugin/LocalSubDownloader/go_into',
+                                        'method': 'post',
+                                        'params': {'dir_name': '{{sub_dir}}'}
+                                    },
+                                    'update:modelValue': {
                                         'api': 'plugin/LocalSubDownloader/go_into',
                                         'method': 'post',
                                         'params': {'dir_name': '{{sub_dir}}'}
@@ -909,6 +916,47 @@ class LocalSubDownloader(_PluginBase):
                                 'component': 'VForm',
                                 'content': [
 
+                                    # 根目录选择下拉框 (支持 change & update:modelValue 双重保障)
+                                    *(
+                                        [{
+                                            'component': 'VRow',
+                                            'props': {'class': 'mb-2', 'dense': True},
+                                            'content': [
+                                                {
+                                                    'component': 'VCol',
+                                                    'props': {'cols': 12},
+                                                    'content': [
+                                                        {
+                                                            'component': 'VSelect',
+                                                            'props': {
+                                                                'model-value': current_root,
+                                                                'model': 'root_path',
+                                                                'label': '📂 切换根目录',
+                                                                'items': root_items,
+                                                                'variant': 'outlined',
+                                                                'density': 'compact',
+                                                                'hide-details': True
+                                                            },
+                                                            'events': {
+                                                                'change': {
+                                                                    'api': 'plugin/LocalSubDownloader/change_root',
+                                                                    'method': 'post',
+                                                                    'params': {'root_path': '{{root_path}}'}
+                                                                },
+                                                                'update:modelValue': {
+                                                                    'api': 'plugin/LocalSubDownloader/change_root',
+                                                                    'method': 'post',
+                                                                    'params': {'root_path': '{{root_path}}'}
+                                                                }
+                                                            }
+                                                        }
+                                                    ]
+                                                }
+                                            ]
+                                        }]
+                                        if root_paths else []
+                                    ),
+
                                     # 当前路径 + 返回按钮
                                     {
                                         'component': 'VRow',
@@ -981,6 +1029,11 @@ class LocalSubDownloader(_PluginBase):
                                                                 'api': 'plugin/LocalSubDownloader/change_sort',
                                                                 'method': 'post',
                                                                 'params': {'sort_by': '{{sort_by}}'}
+                                                            },
+                                                            'update:modelValue': {
+                                                                'api': 'plugin/LocalSubDownloader/change_sort',
+                                                                'method': 'post',
+                                                                'params': {'sort_by': '{{sort_by}}'}
                                                             }
                                                         }
                                                     }
@@ -988,6 +1041,8 @@ class LocalSubDownloader(_PluginBase):
                                             }
                                         ]
                                     },
+                                    # 子目录搜索与级联导航 (新增)
+                                    *dir_navigation,
                                     # 子目录磁贴按钮（硬编码 params，稳定可靠）
                                     *(
                                         [{
