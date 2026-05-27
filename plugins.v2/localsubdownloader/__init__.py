@@ -1,4 +1,4 @@
-import hashlib
+﻿import hashlib
 import io
 import json
 import zipfile
@@ -96,6 +96,13 @@ async def global_api_change_sort(request: Request) -> Any:
     instance = PluginManager()._running_plugins.get("LocalSubDownloader")
     if instance:
         return await instance.api_change_sort(request)
+    return {"code": 1, "message": "插件实例未加载"}
+
+
+async def global_api_change_filter(request: Request) -> Any:
+    instance = PluginManager()._running_plugins.get("LocalSubDownloader")
+    if instance:
+        return await instance.api_change_filter(request)
     return {"code": 1, "message": "插件实例未加载"}
 
 
@@ -386,6 +393,14 @@ class LocalSubDownloader(_PluginBase):
                 "auth": "bear",
                 "summary": "切换排序方式",
                 "description": "切换当前手动字幕整理目录下的排序方式",
+            },
+            {
+                "path": "/change_filter",
+                "endpoint": global_api_change_filter,
+                "methods": ["POST", "GET"],
+                "auth": "bear",
+                "summary": "切换当前目录名称筛选关键字",
+                "description": "切换当前手动字幕整理目录下的名称筛选关键字",
             }
         ]
 
@@ -600,10 +615,15 @@ class LocalSubDownloader(_PluginBase):
 
         sort_by = self.get_data("sort_by") or "name"
 
-        # 扫描当前浏览目录下的子目录与视频文件
+        # 扫描当前浏览目录下的子目录与视频文件并提取过滤关键字
+        all_dir_names = []
+        all_video_names = []
         sub_dirs = []
         video_files = []
         video_extensions = {'.mp4', '.mkv', '.avi', '.ts', '.wmv', '.mov', '.flv', '.rmvb'}
+
+        name_filter = self.get_data("name_filter") or ""
+        name_filter_lower = name_filter.lower() if name_filter else ""
 
         if current_dir:
             c_path = Path(current_dir)
@@ -615,8 +635,14 @@ class LocalSubDownloader(_PluginBase):
                         if item.name in ("@eaDir", "#recycle", "@tmp"):
                             continue
                         if item.is_dir():
+                            all_dir_names.append(item.name)
+                            if name_filter_lower and name_filter_lower not in item.name.lower():
+                                continue
                             sub_dirs.append(item.name)
                         elif item.is_file() and item.suffix.lower() in video_extensions:
+                            all_video_names.append(item.stem)
+                            if name_filter_lower and name_filter_lower not in item.name.lower():
+                                continue
                             video_files.append(item)
                 except Exception as e:
                     logger.error(f"[LocalSubDownloader] 扫描目录 {current_dir} 失败: {e}")
@@ -640,6 +666,124 @@ class LocalSubDownloader(_PluginBase):
                 # 默认按名称排序
                 sub_dirs.sort()
                 video_files.sort(key=lambda x: x.name)
+
+        # 高能提取当前目录下的过滤关键字列表 (Filter Chips)
+        import re
+        filter_chips = set()
+        exclude_words = {
+            '1080p', '2160p', '4k', '720p', 'h264', 'x264', 'h265', 'x265', 'hevc', 'mp4', 'mkv', 
+            'web-dl', 'webdl', 'bluray', 'chs', 'cht', 'eng', 'chs&eng', 'aac', 'dd5.1', 'dts',
+            'sub', 'multi-sub', 'multi', 'uncut', 'rip', 'remux', 'atmos', 'hdr', '10bit', 'sp', 'ova'
+        }
+        
+        def clean_title_name(name: str) -> str:
+            cleaned = re.sub(r'\s*[\(\[\\【\\《\d{4}[\)\]\\】\\》].*', '', name)
+            cleaned = re.sub(r'\s*\(\d{2}-\d{2}\s+\d{2}:\d{2}\).*', '', cleaned)
+            cleaned = cleaned.strip()
+            cleaned = re.split(r'[:：]', cleaned)[0].strip()
+            cleaned = re.split(r'大战', cleaned)[0].strip()
+            cleaned = re.sub(r'\d+$', '', cleaned).strip()
+            cleaned = re.sub(r'\s+[I|V|X|v|x]+$', '', cleaned).strip()
+            cleaned = re.sub(r'(的故事|物语)$', '', cleaned).strip()
+            for conjunction in ('与', '之', '及'):
+                if conjunction in cleaned:
+                    parts = cleaned.split(conjunction)
+                    if len(parts[0].strip()) >= 3:
+                        cleaned = parts[0].strip()
+                        break
+            return cleaned
+
+        # 1) 从子目录名提取
+        for d in all_dir_names:
+            if 2 <= len(d) <= 15:
+                filter_chips.add(d.strip())
+            for p in re.split(r'[\s\.\-\_\,\/\\]+', d):
+                p_clean = p.strip()
+                if len(p_clean) >= 2 and p_clean.lower() not in exclude_words and not p_clean.isdigit():
+                    filter_chips.add(p_clean)
+
+        # 2) 从视频无后缀文件名提取
+        for v in all_video_names:
+            for part in re.findall(r'[\u4e00-\u9fa5]+', v):
+                if len(part) >= 2:
+                    filter_chips.add(part)
+            for part in re.findall(r'[\[\(\【\《(.*?)[\]\)\】\》]', v):
+                part_clean = part.strip()
+                if 2 <= len(part_clean) <= 12 and not part_clean.isdigit() and part_clean.lower() not in exclude_words:
+                    filter_chips.add(part_clean)
+            clean_v = re.sub(r'[\[\(\【\《.*?[\]\)\】\搭载]', ' ', v)
+            for w in re.split(r'[\s\.\-\_\,\/\\]+', clean_v):
+                w_clean = w.strip()
+                if 2 <= len(w_clean) <= 15 and not w_clean.isdigit() and w_clean.lower() not in exclude_words:
+                    filter_chips.add(w_clean)
+
+        all_candidates = set()
+        for c in filter_chips:
+            if c.isdigit() and len(c) == 4:
+                continue
+            if c.lower() in exclude_words:
+                continue
+            c_clean = clean_title_name(c)
+            if c_clean.isdigit() and len(c_clean) == 4:
+                continue
+            if len(c_clean) >= 2:
+                all_candidates.add(c_clean)
+
+        for d in all_dir_names:
+            c_clean = clean_title_name(d)
+            if c_clean.isdigit() and len(c_clean) == 4:
+                continue
+            if len(c_clean) >= 2:
+                all_candidates.add(c_clean)
+                
+        for v in all_video_names:
+            c_clean = clean_title_name(v)
+            if c_clean.isdigit() and len(c_clean) == 4:
+                continue
+            if len(c_clean) >= 2:
+                all_candidates.add(c_clean)
+                
+        if name_filter:
+            c_clean = clean_title_name(name_filter)
+            if c_clean:
+                all_candidates.add(c_clean)
+
+        final_unique_candidates = set()
+        temp_list = sorted(list(all_candidates))
+        mapping = {item: item for item in temp_list}
+        
+        for i in range(len(temp_list) - 1):
+            s1 = temp_list[i]
+            s2 = temp_list[i + 1]
+            common = []
+            for c1, c2 in zip(s1, s2):
+                if c1 == c2:
+                    common.append(c1)
+                else:
+                    break
+            prefix = "".join(common).strip()
+            prefix = re.sub(r'[:：·\-\_\s\d\+]+$', '', prefix).strip()
+            prefix = re.sub(r'\s+[I|V|X|v|x]+$', '', prefix).strip()
+            has_chinese_prefix = any('\u4e00' <= char <= '\u9fa5' for char in prefix)
+            min_len = 2 if has_chinese_prefix else 4
+            if len(prefix) >= min_len:
+                old_val1 = mapping[s1]
+                old_val2 = mapping[s2]
+                for k, v in mapping.items():
+                    if v == old_val1 or v == old_val2:
+                        mapping[k] = prefix
+                        
+        for item in temp_list:
+            final_unique_candidates.add(mapping[item])
+            
+        chips_list = sorted(list(final_unique_candidates))
+        def chip_sort_key(c):
+            try:
+                gbk_bytes = c.encode('gbk', errors='ignore')
+                return (1, 0, gbk_bytes)
+            except Exception:
+                return (2, 0, c.lower().encode('utf-8', errors='ignore'))
+        chips_list.sort(key=chip_sort_key)
 
         # 1. 完整定义子目录按钮磁贴列表
         sub_dir_details = []
@@ -667,7 +811,7 @@ class LocalSubDownloader(_PluginBase):
                             'variant': 'outlined',
                             'block': True,
                             'color': 'primary',
-                            'class': 'text-none text-truncate justify-start',
+                            'class': 'text-none text-truncate justify-start sub-dir-filter-btn',
                             'density': 'comfortable'
                         },
                         'events': {
@@ -727,7 +871,7 @@ class LocalSubDownloader(_PluginBase):
                 
                 video_items.append({
                     'component': 'VListItem',
-                    'props': {'class': 'py-0 border-bottom'},
+                    'props': {'class': 'py-0 border-bottom video-filter-item'},
                     'content': [
                         {
                             'component': 'VRow',
@@ -916,86 +1060,220 @@ class LocalSubDownloader(_PluginBase):
                                 'component': 'VForm',
                                 'content': [
 
-                                    # 当前路径 + 返回按钮
+                                    # 弹出式整理路径下拉菜单（结合 VBtn + VMenu + VListItem，无缝聚合导航动作）
                                     {
                                         'component': 'VRow',
-                                    'props': {'class': 'mb-2 align-center', 'dense': True},
+                                        'props': {'class': 'mb-2', 'dense': True},
                                         'content': [
                                             {
                                                 'component': 'VCol',
-                                                'props': {'cols': 12, 'md': 9},
-                                                'content': [{
-                                                    'component': 'VTextField',
-                                                    'props': {
-                                                        'model-value': current_dir or '未选择目录',
-                                                        'readonly': True,
-                                                        'variant': 'outlined',
-                                                        'density': 'compact',
-                                                        'prepend-inner-icon': 'mdi-folder-open',
-                                                        'label': '当前目录',
-                                                        'hide-details': True
-                                                    }
-                                                }]
-                                            },
-                                            {
-                                                'component': 'VCol',
-                                                'props': {'cols': 12, 'md': 3},
-                                                'content': [{
-                                                    'component': 'VBtn',
-                                                    'text': '↑ 返回上一级',
-                                                    'props': {
-                                                        'variant': 'tonal',
-                                                        'color': 'secondary',
-                                                        'block': True,
-                                                        'prepend-icon': 'mdi-arrow-up-bold',
-                                                        'disabled': not current_dir or normalize_path(str(Path(current_dir).parent)) == normalize_path(current_dir)
-                                                    },
-                                                    'events': {
-                                                        'click': {
-                                                            'api': 'plugin/LocalSubDownloader/go_up',
-                                                            'method': 'post'
+                                                'props': {'cols': 12},
+                                                'content': [
+                                                    {
+                                                        'component': 'VBtn',
+                                                        'text': f"📂 当前路径: {current_dir} ▾",
+                                                        'props': {
+                                                            'id': 'root-menu-activator',
+                                                            'variant': 'outlined',
+                                                            'color': 'primary',
+                                                            'block': True,
+                                                            'density': 'comfortable',
+                                                            'class': 'text-none text-truncate justify-start'
                                                         }
+                                                    },
+                                                    {
+                                                        'component': 'VMenu',
+                                                        'props': {
+                                                            'activator': '#root-menu-activator',
+                                                            'close-on-content-click': True
+                                                        },
+                                                        'content': [
+                                                            {
+                                                                'component': 'VList',
+                                                                'props': {'density': 'compact', 'style': 'max-height: 320px; overflow-y: auto;'},
+                                                                'content': (
+                                                                    # 1. 上级返回按钮
+                                                                    ([
+                                                                        {
+                                                                            'component': 'VListItem',
+                                                                            'props': {
+                                                                                'title': '⬆️ 返回上一级',
+                                                                                'prepend-icon': 'mdi-arrow-up-bold',
+                                                                                'class': 'text-secondary font-weight-bold'
+                                                                            },
+                                                                            'events': {
+                                                                                'click': {
+                                                                                    'api': 'plugin/LocalSubDownloader/go_up',
+                                                                                    'method': 'post'
+                                                                                }
+                                                                            }
+                                                                        },
+                                                                        {'component': 'VDivider'}
+                                                                    ] if current_dir and normalize_path(str(Path(current_dir).parent)) != normalize_path(current_dir) else []) +
+                                                                    # 2. 当前路径
+                                                                    [{
+                                                                        'component': 'VListItem',
+                                                                        'props': {
+                                                                            'title': f'📌 当前路径: {current_dir}',
+                                                                            'active': True,
+                                                                            'active-color': 'primary',
+                                                                            'class': 'font-weight-bold'
+                                                                        }
+                                                                    }] +
+                                                                    # 3. 当前路径的子路径
+                                                                    ([
+                                                                        {'component': 'VDivider'},
+                                                                        {
+                                                                            'component': 'VListItem',
+                                                                            'props': {
+                                                                                'title': '📁 子目录 (点击进入):',
+                                                                                'disabled': True,
+                                                                                'class': 'text-caption text-grey py-0 font-weight-medium'
+                                                                            }
+                                                                        }
+                                                                    ] + [
+                                                                        {
+                                                                            'component': 'VListItem',
+                                                                            'props': {
+                                                                                'title': f"{d}",
+                                                                                'prepend-icon': 'mdi-folder',
+                                                                                'class': 'text-body-2 pl-6'
+                                                                            },
+                                                                            'events': {
+                                                                                'click': {
+                                                                                    'api': 'plugin/LocalSubDownloader/go_into',
+                                                                                    'method': 'post',
+                                                                                    'params': {'dir_name': d}
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                        for d in sub_dirs
+                                                                    ] if sub_dirs else [])
+                                                                )
+                                                            }
+                                                        ]
                                                     }
-                                                }]
-                                            }
+                                                ]
+                                            },
                                         ]
-                                    },
-                                    # 排序控制行
+                                     },
+                                    # 排序方式 与 名称过滤 下拉菜单控制行
                                     {
                                         'component': 'VRow',
                                         'props': {'class': 'mb-2 align-center', 'dense': True},
                                         'content': [
+                                            # 1. 排序下拉
                                             {
                                                 'component': 'VCol',
-                                                'props': {'cols': 12, 'md': 4},
+                                                'props': {'cols': 6},
                                                 'content': [
                                                     {
-                                                        'component': 'VSelect',
+                                                        'component': 'VBtn',
+                                                        'text': f"🔀 排序: {'修改时间' if sort_by == 'time' else '名称'} ▾",
                                                         'props': {
-                                                            'value': sort_by,
-                                                            'model': 'sort_by',
-                                                            'label': '🔀 排序方式',
-                                                            'items': [
-                                                                {'title': '🔤 按名称排序', 'value': 'name'},
-                                                                {'title': '📅 按修改时间排序', 'value': 'time'}
-                                                            ],
+                                                            'id': 'sort-menu-activator',
                                                             'variant': 'outlined',
-                                                            'density': 'compact',
-                                                            'hide-details': True
-                                                        },
-                                                        'events': {
-                                                            'update:modelValue': {
-                                                                'api': 'plugin/LocalSubDownloader/change_sort',
-                                                                'method': 'post',
-                                                                'params': {'sort_by': '{{sort_by}}'}
-                                                            }
+                                                            'color': 'secondary',
+                                                            'block': True,
+                                                            'density': 'comfortable',
+                                                            'class': 'text-none text-truncate justify-start'
                                                         }
+                                                    },
+                                                    {
+                                                        'component': 'VMenu',
+                                                        'props': {
+                                                            'activator': '#sort-menu-activator',
+                                                            'close-on-content-click': True
+                                                        },
+                                                        'content': [
+                                                            {
+                                                                'component': 'VList',
+                                                                'props': {'density': 'compact'},
+                                                                'content': [
+                                                                    {
+                                                                        'component': 'VListItem',
+                                                                        'props': {
+                                                                            'title': '🔤 按名称排序',
+                                                                            'active': sort_by == 'name',
+                                                                            'active-color': 'primary'
+                                                                        },
+                                                                        'events': {
+                                                                            'click': {
+                                                                                'api': 'plugin/LocalSubDownloader/change_sort',
+                                                                                'method': 'post',
+                                                                                'params': {'sort_by': 'name'}
+                                                                            }
+                                                                        }
+                                                                    },
+                                                                    {
+                                                                        'component': 'VListItem',
+                                                                        'props': {
+                                                                            'title': '📅 按时间排序',
+                                                                            'active': sort_by == 'time',
+                                                                            'active-color': 'primary'
+                                                                        },
+                                                                        'events': {
+                                                                            'click': {
+                                                                                'api': 'plugin/LocalSubDownloader/change_sort',
+                                                                                'method': 'post',
+                                                                                'params': {'sort_by': 'time'}
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            },
+                                            # 2. 名称过滤（内联输入框，带×清除按钮）
+                                            {
+                                                'component': 'VCol',
+                                                'props': {'cols': 6},
+                                                'content': [
+                                                    {
+                                                        'component': 'div',
+                                                        'html': f'''
+                                                            <div style="position: relative; display: flex; align-items: center;">
+                                                                <input id="custom-name-filter" type="text" value="{name_filter}" placeholder="🏷️ 输入名称过滤..."
+                                                                       style="width: 100%; box-sizing: border-box; border: 1px solid rgba(128,128,128,0.4); padding: 6px 32px 6px 12px; border-radius: 4px; color: inherit; background: transparent; outline: none; font-size: 14px;"
+                                                                       oninput="
+                                                                           const val = this.value.trim().toLowerCase();
+                                                                           const clr = document.getElementById(&apos;custom-filter-clear&apos;);
+                                                                           if (clr) clr.style.display = val ? &apos;flex&apos; : &apos;none&apos;;
+                                                                           document.querySelectorAll(&apos;.sub-dir-filter-btn&apos;).forEach(btn => {{
+                                                                               const col = btn.closest(&apos;.v-col&apos;) || btn.parentElement;
+                                                                               if (!val || btn.textContent.toLowerCase().includes(val)) {{
+                                                                                   col.style.setProperty(&apos;display&apos;, &apos;&apos;, &apos;important&apos;);
+                                                                               }} else {{
+                                                                                   col.style.setProperty(&apos;display&apos;, &apos;none&apos;, &apos;important&apos;);
+                                                                               }}
+                                                                           }});
+                                                                           document.querySelectorAll(&apos;.video-filter-item&apos;).forEach(item => {{
+                                                                               if (!val || item.textContent.toLowerCase().includes(val)) {{
+                                                                                   item.style.setProperty(&apos;display&apos;, &apos;&apos;, &apos;important&apos;);
+                                                                               }} else {{
+                                                                                   item.style.setProperty(&apos;display&apos;, &apos;none&apos;, &apos;important&apos;);
+                                                                               }}
+                                                                           }});
+                                                                       "
+                                                                />
+                                                                <span id="custom-filter-clear"
+                                                                      style="display: {'flex' if name_filter else 'none'}; position: absolute; right: 6px; top: 50%; transform: translateY(-50%); cursor: pointer; color: rgba(128,128,128,0.8); font-size: 16px; line-height: 1; align-items: center; justify-content: center; width: 20px; height: 20px;"
+                                                                      onclick="
+                                                                          const inp = document.getElementById(&apos;custom-name-filter&apos;);
+                                                                          inp.value = &apos;&apos;;
+                                                                          this.style.display = &apos;none&apos;;
+                                                                          inp.dispatchEvent(new Event(&apos;input&apos;));
+                                                                      ">✕</span>
+                                                            </div>
+                                                        '''
                                                     }
                                                 ]
                                             }
                                         ]
                                     },
-                                    # 子目录磁贴按钮（硬编码 params，稳定可靠）
+                                    # 子目录展示（满足需求：当路径选择后，子路径在下方显示）
                                     *(
                                         [{
                                             'component': 'VRow',
@@ -1003,15 +1281,15 @@ class LocalSubDownloader(_PluginBase):
                                             'content': [
                                                 {
                                                     'component': 'VCol',
-                                                    'props': {'cols': 6, 'md': 4, 'lg': 3},
+                                                    'props': {'cols': 6, 'sm': 4, 'md': 3, 'lg': 2},
                                                     'content': [{
                                                         'component': 'VBtn',
-                                                        'text': display_name,
+                                                        'text': f"📁 {d}",
                                                         'props': {
                                                             'variant': 'tonal',
                                                             'block': True,
                                                             'color': 'primary',
-                                                            'class': 'text-none text-truncate justify-start',
+                                                            'class': 'text-none text-truncate justify-start sub-dir-filter-btn',
                                                             'density': 'comfortable',
                                                             'size': 'small'
                                                         },
@@ -1024,11 +1302,12 @@ class LocalSubDownloader(_PluginBase):
                                                         }
                                                     }]
                                                 }
-                                                for d, display_name in sub_dir_details
+                                                for d in sub_dirs
                                             ]
                                         }]
                                         if sub_dirs else []
                                     ),
+
                                     # 视频选择区域（不用下拉，改为区域显示）
                                     *(
                                         [{
@@ -1295,7 +1574,8 @@ class LocalSubDownloader(_PluginBase):
                 # 切换路径自动清空勾选缓存，避免旧路径选中遗留
                 self.save_data("selected_videos", [])
                 self._selected_videos_cache = []
-                self.add_log(f"📌 手动整理根目录已切换为: {root_path} (已清空旧路径勾选缓存)")
+                self.save_data("name_filter", "")
+                self.add_log(f"📌 手动整理根目录已切换为: {root_path} (已清空旧路径勾选与名称筛选缓存)")
                 return {"code": 0, "message": f"根目录已成功切换为: {root_path}"}
             return {"code": 1, "message": "切换根目录失败：接收到的路径为空"}
         except Exception as e:
@@ -1322,7 +1602,8 @@ class LocalSubDownloader(_PluginBase):
             # 切换路径自动清空勾选缓存，避免旧路径选中遗留
             self.save_data("selected_videos", [])
             self._selected_videos_cache = []
-            self.add_log(f"📁 已返回上一级目录: {norm_parent} (已清空旧路径勾选缓存)")
+            self.save_data("name_filter", "")
+            self.add_log(f"📁 已返回上一级目录: {norm_parent} (已清空旧路径勾选与名称筛选缓存)")
             return {"code": 0, "message": f"已成功返回上一级: {norm_parent}"}
         except Exception as e:
             return {"code": 1, "message": f"返回上一级失败: {e}"}
@@ -1353,7 +1634,8 @@ class LocalSubDownloader(_PluginBase):
                 # 切换路径自动清空勾选缓存，避免旧路径选中遗留
                 self.save_data("selected_videos", [])
                 self._selected_videos_cache = []
-                self.add_log(f"📁 已进入子目录: {dir_name} (已清空旧路径勾选缓存)")
+                self.save_data("name_filter", "")
+                self.add_log(f"📁 已进入子目录: {dir_name} (已清空旧路径勾选与名称筛选缓存)")
                 return {"code": 0, "message": f"已成功进入目录: {dir_name}"}
             return {"code": 1, "message": "目标文件夹不存在或不是目录"}
         except Exception as e:
@@ -1539,6 +1821,24 @@ class LocalSubDownloader(_PluginBase):
             return {"code": 0, "message": f"排序方式已切换为: {'按修改时间' if sort_by == 'time' else '按名称'}"}
         except Exception as e:
             return {"code": 1, "message": f"切换排序失败: {e}"}
+
+    async def api_change_filter(self, request: Request) -> Any:
+        """
+        前台 POST 请求调用的端点：切换当前目录名称筛选关键字
+        """
+        try:
+            body = await get_request_params(request)
+            logger.info(f"[LocalSubDownloader] api_change_filter body: {body}")
+            name_filter = body.get("name_filter") or ""
+            # 过滤未替换的模板占位符（框架未替换时保持现有过滤不变）
+            if "{{" in name_filter:
+                logger.warning(f"[LocalSubDownloader] 收到未替换的模板占位符: {name_filter}，保持现有过滤不变")
+                return {"code": 0, "message": "过滤保持不变"}
+            self.save_data("name_filter", name_filter.strip())
+            logger.info(f"[LocalSubDownloader] 名称筛选已更新为: {repr(name_filter.strip())}")
+            return {"code": 0, "message": f"名称筛选已更新: {name_filter.strip() or '(已清空)'}"}
+        except Exception as e:
+            return {"code": 1, "message": f"切换筛选失败: {e}"}
 
     def _process_selected_videos(self, video_paths: List[str]):
         """
