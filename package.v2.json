@@ -8,5 +8,15 @@
     "author": "318182456",
     "level": 1,
     "v2": true
+  },
+  "enveditor": {
+    "name": "环境变量编辑器",
+    "description": "在线查看与编辑 app.env 配置文件，支持即时热更新当前运行进程的系统环境变量及配置对象。",
+    "labels": "系统",
+    "version": "1.0.0",
+    "icon": "settings.png",
+    "author": "318182456",
+    "level": 1,
+    "v2": true
   }
 }
