@@ -883,7 +883,7 @@ class LocalSubDownloader(_PluginBase):
                                         'component': 'VRow',
                                         'props': {'class': 'mb-3', 'dense': True},
                                         'content': [
-                                            # 1. 排序下拉
+                                            # 1. 排序下拉（联动前端与后端）
                                             {
                                                 'component': 'VCol',
                                                 'props': {'cols': 6},
@@ -966,8 +966,9 @@ class LocalSubDownloader(_PluginBase):
                                                                                const val = this.value.trim().toLowerCase();
                                                                                const clr = document.getElementById(&apos;custom-filter-clear&apos;);
                                                                                if (clr) clr.style.display = val ? &apos;flex&apos; : &apos;none&apos;;
-                                                                               document.querySelectorAll(&apos;.sub-dir-filter-btn&apos;).forEach(btn => {{
-                                                                                   const col = btn.closest(&apos;.v-col&apos;) || btn.parentElement;
+                                                                               document.querySelectorAll(&apos;.sub-dir-col&apos;).forEach(col => {{
+                                                                                   const btn = col.querySelector(&apos;.sub-dir-filter-btn&apos;);
+                                                                                   if (!btn) return;
                                                                                    if (!val || btn.textContent.toLowerCase().includes(val)) {{
                                                                                        col.style.setProperty(&apos;display&apos;, &apos;&apos;, &apos;important&apos;);
                                                                                    }} else {{
@@ -1003,11 +1004,11 @@ class LocalSubDownloader(_PluginBase):
                                     *(
                                         [{
                                             'component': 'VRow',
-                                            'props': {'dense': True, 'class': 'mb-2', 'style': 'min-height: 120px; max-height: 120px; overflow-y: auto;'},
+                                            'props': {'dense': True, 'class': 'mb-2 sub-dirs-container', 'style': 'min-height: 120px; max-height: 120px; overflow-y: auto; margin: 0; width: 100%; display: flex; align-content: flex-start; align-items: flex-start;'},
                                             'content': [
                                                 {
                                                     'component': 'VCol',
-                                                    'props': {'cols': 6, 'sm': 4, 'md': 3, 'lg': 2},
+                                                    'props': {'cols': 6, 'sm': 4, 'md': 3, 'lg': 2, 'class': 'pa-1 sub-dir-col', 'style': 'align-self: flex-start;'},
                                                     'content': [{
                                                         'component': 'VBtn',
                                                         'text': f"📁 {d}",
@@ -1040,13 +1041,13 @@ class LocalSubDownloader(_PluginBase):
                                             'component': 'VCard',
                                             'props': {
                                                 'variant': 'flat',
-                                                'class': 'border rounded-lg mb-2',
-                                                'style': 'min-height: 200px; max-height: 200px; overflow-y: auto;'
+                                                'class': 'border rounded-lg mb-2 video-files-container',
+                                                'style': 'min-height: 200px; max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; justify-content: flex-start;'
                                             },
                                             'content': [
                                                 {
                                                     'component': 'VList',
-                                                    'props': {'density': 'compact', 'class': 'py-0'},
+                                                    'props': {'density': 'compact', 'class': 'py-0', 'style': 'width: 100%; align-self: flex-start;'},
                                                     'content': video_items
                                                 }
                                             ]
