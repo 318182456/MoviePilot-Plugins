@@ -1,4 +1,4 @@
-﻿import hashlib
+import hashlib
 import io
 import json
 import zipfile
@@ -548,45 +548,6 @@ class LocalSubDownloader(_PluginBase):
                                         'props': {
                                             'model': 'subdl_api_key',
                                             'label': 'SubDL API Key (请前往subdl.com申请)'
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 4},
-                                'content': [
-                                    {
-                                        'component': 'VSelect',
-                                        'props': {
-                                            'model': 'sort_by',
-                                            'label': '🔀 控制台文件排序方式',
-                                            'items': [
-                                                {'title': '🔤 按名称排序', 'value': 'name'},
-                                                {'title': '📅 按修改时间排序', 'value': 'time'}
-                                            ],
-                                            'hint': '控制台文件列表排列顺序，保存后生效'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 8},
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'name_filter',
-                                            'label': '🔍 控制台名称过滤关键字',
-                                            'placeholder': '输入关键字过滤控制台文件列表，不区分大小写，保存后生效',
-                                            'clearable': True,
-                                            'hint': '置空则不过滤，保存后生效'
                                         }
                                     }
                                 ]
@@ -1289,22 +1250,27 @@ class LocalSubDownloader(_PluginBase):
                                                                        oninput="
                                                                            const val = this.value.trim().toLowerCase();
                                                                            const clr = document.getElementById(&apos;custom-filter-clear&apos;);
-                                                                           if (clr) clr.style.display = val ? &apos;flex&apos; : &apos;none&apos;;
-                                                                           document.querySelectorAll(&apos;.sub-dir-filter-btn&apos;).forEach(btn => {{
-                                                                               const col = btn.closest(&apos;.v-col&apos;) || btn.parentElement;
-                                                                               if (!val || btn.textContent.toLowerCase().includes(val)) {{
-                                                                                   col.style.setProperty(&apos;display&apos;, &apos;&apos;, &apos;important&apos;);
-                                                                               }} else {{
-                                                                                   col.style.setProperty(&apos;display&apos;, &apos;none&apos;, &apos;important&apos;);
-                                                                               }}
-                                                                           }});
-                                                                           document.querySelectorAll(&apos;.video-filter-item&apos;).forEach(item => {{
-                                                                               if (!val || item.textContent.toLowerCase().includes(val)) {{
-                                                                                   item.style.setProperty(&apos;display&apos;, &apos;&apos;, &apos;important&apos;);
-                                                                               }} else {{
-                                                                                   item.style.setProperty(&apos;display&apos;, &apos;none&apos;, &apos;important&apos;);
-                                                                               }}
-                                                                           }});
+                                                                           clearTimeout(this.dataset.timer);
+                                                                           this.dataset.timer = setTimeout(() => {{
+                                                                               const val = this.value.trim().toLowerCase();
+                                                                               const clr = document.getElementById(&apos;custom-filter-clear&apos;);
+                                                                               if (clr) clr.style.display = val ? &apos;flex&apos; : &apos;none&apos;;
+                                                                               document.querySelectorAll(&apos;.sub-dir-filter-btn&apos;).forEach(btn => {{
+                                                                                   const col = btn.closest(&apos;.v-col&apos;) || btn.parentElement;
+                                                                                   if (!val || btn.textContent.toLowerCase().includes(val)) {{
+                                                                                       col.style.setProperty(&apos;display&apos;, &apos;&apos;, &apos;important&apos;);
+                                                                                   }} else {{
+                                                                                       col.style.setProperty(&apos;display&apos;, &apos;none&apos;, &apos;important&apos;);
+                                                                                   }}
+                                                                               }});
+                                                                               document.querySelectorAll(&apos;.video-filter-item&apos;).forEach(item => {{
+                                                                                   if (!val || item.textContent.toLowerCase().includes(val)) {{
+                                                                                       item.style.setProperty(&apos;display&apos;, &apos;&apos;, &apos;important&apos;);
+                                                                                   }} else {{
+                                                                                       item.style.setProperty(&apos;display&apos;, &apos;none&apos;, &apos;important&apos;);
+                                                                                   }}
+                                                                               }});
+                                                                           }}, 300);
                                                                        "
                                                                 />
                                                                 <span id="custom-filter-clear"
@@ -1326,7 +1292,7 @@ class LocalSubDownloader(_PluginBase):
                                     *(
                                         [{
                                             'component': 'VRow',
-                                            'props': {'dense': True, 'class': 'mb-2', 'style': 'max-height:80px;overflow-y:auto;'},
+                                            'props': {'dense': True, 'class': 'mb-2', 'style': 'min-height: 150px; max-height: 150px; overflow-y: auto;'},
                                             'content': [
                                                 {
                                                     'component': 'VCol',
@@ -1364,7 +1330,7 @@ class LocalSubDownloader(_PluginBase):
                                             'props': {
                                                 'variant': 'flat',
                                                 'class': 'border rounded-lg mb-2',
-                                                'style': 'max-height: 100px; overflow-y: auto;'
+                                                'style': 'min-height: 350px; max-height: 350px; overflow-y: auto;'
                                             },
                                             'content': [
                                                 {
@@ -1400,7 +1366,7 @@ class LocalSubDownloader(_PluginBase):
                         'content': (
                             [{
                                 'component': 'VList',
-                                'props': {'density': 'compact', 'lines': 'two', 'style': 'max-height: 100px; overflow-y: auto;'},
+                                'props': {'density': 'compact', 'lines': 'two', 'style': 'min-height: 300px; max-height: 300px; overflow-y: auto;'},
                                 'content': [
                                     item
                                     for row in list(reversed(history_rows))
