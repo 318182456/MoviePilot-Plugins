@@ -43,6 +43,14 @@ async def global_api_change_root(request: Request) -> Any:
     return {"code": 1, "message": "插件实例未加载"}
 
 
+async def global_api_go_to(request: Request) -> Any:
+    instance = PluginManager()._running_plugins.get("LocalSubDownloader")
+    if instance:
+        return await instance.api_go_to(request)
+    return {"code": 1, "message": "插件实例未加载"}
+
+
+
 async def global_api_go_up(request: Request) -> Any:
     instance = PluginManager()._running_plugins.get("LocalSubDownloader")
     if instance:
@@ -364,6 +372,14 @@ class LocalSubDownloader(_PluginBase):
                 "auth": "bear",
                 "summary": "切换当前目录名称筛选关键字",
                 "description": "切换当前手动字幕整理目录下的名称筛选关键字",
+            },
+            {
+                "path": "/go_to",
+                "endpoint": global_api_go_to,
+                "methods": ["POST", "GET"],
+                "auth": "bear",
+                "summary": "跳转到指定目录",
+                "description": "跳转到指定的浏览目录",
             }
         ]
 
@@ -796,8 +812,7 @@ class LocalSubDownloader(_PluginBase):
                             {
                                 'component': 'VForm',
                                 'content': [
-
-                                    # 弹出式整理路径下拉菜单（结合 VBtn + VMenu + VListItem，无缝聚合导航动作）
+                                    # 面包屑样式当前路径
                                     {
                                         'component': 'VRow',
                                         'props': {'class': 'mb-2', 'dense': True},
@@ -807,93 +822,62 @@ class LocalSubDownloader(_PluginBase):
                                                 'props': {'cols': 12},
                                                 'content': [
                                                     {
-                                                        'component': 'VBtn',
-                                                        'text': f"📂 当前路径: {current_dir} ▾",
+                                                        'component': 'div',
                                                         'props': {
-                                                            'id': 'root-menu-activator',
-                                                            'variant': 'outlined',
-                                                            'color': 'primary',
-                                                            'block': True,
-                                                            'density': 'comfortable',
-                                                            'class': 'text-none text-truncate justify-start'
-                                                        }
-                                                    },
-                                                    {
-                                                        'component': 'VMenu',
-                                                        'props': {
-                                                            'activator': '#root-menu-activator',
-                                                            'close-on-content-click': True
+                                                            'style': 'display: flex; flex-wrap: wrap; align-items: center; padding: 6px 12px; border: 1px solid rgba(128,128,128,0.25); border-radius: 4px; background-color: var(--v-theme-surface-variant, rgba(0,0,0,0.03));'
                                                         },
-                                                        'content': [
-                                                            {
-                                                                'component': 'VList',
-                                                                'props': {'density': 'compact', 'style': 'max-height: 320px; overflow-y: auto;'},
-                                                                'content': (
-                                                                    # 1. 上级返回按钮
-                                                                    ([
-                                                                        {
-                                                                            'component': 'VListItem',
-                                                                            'props': {
-                                                                                'title': '⬆️ 返回上一级',
-                                                                                'prepend-icon': 'mdi-arrow-up-bold',
-                                                                                'class': 'text-secondary font-weight-bold'
-                                                                            },
-                                                                            'events': {
-                                                                                'click': {
-                                                                                    'api': 'plugin/LocalSubDownloader/go_up',
-                                                                                    'method': 'post'
-                                                                                }
-                                                                            }
-                                                                        },
-                                                                        {'component': 'VDivider'}
-                                                                    ] if current_dir and normalize_path(str(Path(current_dir).parent)) != normalize_path(current_dir) else []) +
-                                                                    # 2. 当前路径
-                                                                    [{
-                                                                        'component': 'VListItem',
+                                                        'content': (
+                                                            [{
+                                                                'component': 'VBtn',
+                                                                'text': '📂 根目录' if current_dir in ('', '/') else '📂',
+                                                                'props': {
+                                                                    'variant': 'text',
+                                                                    'size': 'small',
+                                                                    'color': 'primary',
+                                                                    'class': 'px-1 min-width-0 font-weight-bold'
+                                                                },
+                                                                'events': {
+                                                                    'click': {
+                                                                        'api': 'plugin/LocalSubDownloader/go_to',
+                                                                        'method': 'post',
+                                                                        'params': {'path': '/'}
+                                                                    }
+                                                                }
+                                                            }] + [
+                                                                item
+                                                                for idx, part in enumerate([p for p in current_dir.split('/') if p])
+                                                                for item in [
+                                                                    {
+                                                                        'component': 'span',
+                                                                        'text': ' / ',
+                                                                        'props': {'class': 'mx-1 text-grey-lighten-1 align-self-center', 'style': 'font-size: 14px;'}
+                                                                    },
+                                                                    {
+                                                                        'component': 'VBtn',
+                                                                        'text': part,
                                                                         'props': {
-                                                                            'title': f'📌 当前路径: {current_dir}',
-                                                                            'active': True,
-                                                                            'active-color': 'primary',
-                                                                            'class': 'font-weight-bold'
-                                                                        }
-                                                                    }] +
-                                                                    # 3. 当前路径的子路径
-                                                                    ([
-                                                                        {'component': 'VDivider'},
-                                                                        {
-                                                                            'component': 'VListItem',
-                                                                            'props': {
-                                                                                'title': '📁 子目录 (点击进入):',
-                                                                                'disabled': True,
-                                                                                'class': 'text-caption text-grey py-0 font-weight-medium'
+                                                                            'variant': 'text',
+                                                                            'size': 'small',
+                                                                            'color': 'primary' if idx < len([p for p in current_dir.split('/') if p]) - 1 else 'grey-darken-2',
+                                                                            'disabled': idx == len([p for p in current_dir.split('/') if p]) - 1,
+                                                                            'class': 'px-1 font-weight-medium'
+                                                                        },
+                                                                        'events': {
+                                                                            'click': {
+                                                                                'api': 'plugin/LocalSubDownloader/go_to',
+                                                                                'method': 'post',
+                                                                                'params': {'path': '/' + '/'.join([p for p in current_dir.split('/') if p][:idx+1])}
                                                                             }
                                                                         }
-                                                                    ] + [
-                                                                        {
-                                                                            'component': 'VListItem',
-                                                                            'props': {
-                                                                                'title': f"{d}",
-                                                                                'prepend-icon': 'mdi-folder',
-                                                                                'class': 'text-body-2 pl-6'
-                                                                            },
-                                                                            'events': {
-                                                                                'click': {
-                                                                                    'api': 'plugin/LocalSubDownloader/go_into',
-                                                                                    'method': 'post',
-                                                                                    'params': {'dir_name': d}
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                        for d in sub_dirs
-                                                                    ] if sub_dirs else [])
-                                                                )
-                                                            }
-                                                        ]
+                                                                    }
+                                                                ]
+                                                            ] if current_dir else []
+                                                        )
                                                     }
                                                 ]
-                                            },
+                                            }
                                         ]
-                                     },
+                                    },
                                     # 排序方式 与 名称过滤 下拉菜单控制行
                                     {
                                         'component': 'VRow',
@@ -1015,11 +999,11 @@ class LocalSubDownloader(_PluginBase):
                                             }
                                         ]
                                     },
-                                    # 子目录展示（满足需求：当路径选择后，子路径在下方显示）
+                                    # 子目录展示
                                     *(
                                         [{
                                             'component': 'VRow',
-                                            'props': {'dense': True, 'class': 'mb-2', 'style': 'min-height: 150px; max-height: 150px; overflow-y: auto;'},
+                                            'props': {'dense': True, 'class': 'mb-2', 'style': 'min-height: 120px; max-height: 120px; overflow-y: auto;'},
                                             'content': [
                                                 {
                                                     'component': 'VCol',
@@ -1050,14 +1034,14 @@ class LocalSubDownloader(_PluginBase):
                                         if sub_dirs else []
                                     ),
 
-                                    # 视频选择区域（不用下拉，改为区域显示）
+                                    # 视频选择区域
                                     *(
                                         [{
                                             'component': 'VCard',
                                             'props': {
                                                 'variant': 'flat',
                                                 'class': 'border rounded-lg mb-2',
-                                                'style': 'min-height: 350px; max-height: 350px; overflow-y: auto;'
+                                                'style': 'min-height: 200px; max-height: 200px; overflow-y: auto;'
                                             },
                                             'content': [
                                                 {
@@ -1093,7 +1077,7 @@ class LocalSubDownloader(_PluginBase):
                         'content': (
                             [{
                                 'component': 'VList',
-                                'props': {'density': 'compact', 'lines': 'two', 'style': 'min-height: 300px; max-height: 300px; overflow-y: auto;'},
+                                'props': {'density': 'compact', 'lines': 'two', 'style': 'min-height: 200px; max-height: 200px; overflow-y: auto;'},
                                 'content': [
                                     item
                                     for row in list(reversed(history_rows))
@@ -1346,6 +1330,34 @@ class LocalSubDownloader(_PluginBase):
             return {"code": 1, "message": "目标文件夹不存在或不是目录"}
         except Exception as e:
             return {"code": 1, "message": f"进入子目录失败: {e}"}
+
+    async def api_go_to(self, request: Request) -> Any:
+        """
+        前台 POST 请求调用的端点：直接跳转到指定路径
+        """
+        try:
+            body = await get_request_params(request)
+            self.add_log(f"DEBUG: api_go_to 接收到的 body 原始数据: {body}")
+            target_path = body.get("path") or ""
+            
+            # 智能提取与兜底
+            if not target_path or "{{" in target_path:
+                target_path = body.get("value") or ""
+                
+            if not target_path:
+                return {"code": 1, "message": "目标路径为空"}
+                
+            target_path = normalize_path(target_path)
+            self.save_data("current_dir_path", target_path)
+            # 切换路径自动清空勾选缓存
+            self.save_data("selected_videos", [])
+            self._selected_videos_cache = []
+            self.save_data("name_filter", "")
+            self.add_log(f"📁 已跳转到路径: {target_path} (已清空旧路径勾选与名称筛选缓存)")
+            return {"code": 0, "message": f"已成功跳转至目录: {target_path}"}
+        except Exception as e:
+            return {"code": 1, "message": f"跳转目录失败: {e}"}
+
 
 
 
