@@ -36,13 +36,6 @@ class FakeResponse:
         return json.loads(self.text)
 
 
-async def global_api_manual_run(request: Request) -> Any:
-    instance = PluginManager()._running_plugins.get("LocalSubDownloader")
-    if instance:
-        return await instance.api_manual_run(request)
-    return {"code": 1, "message": "插件实例未加载"}
-
-
 async def global_api_change_root(request: Request) -> Any:
     instance = PluginManager()._running_plugins.get("LocalSubDownloader")
     if instance:
@@ -68,13 +61,6 @@ async def global_api_run_selected(request: Request) -> Any:
     instance = PluginManager()._running_plugins.get("LocalSubDownloader")
     if instance:
         return await instance.api_run_selected(request)
-    return {"code": 1, "message": "插件实例未加载"}
-
-
-async def global_api_save_selected(request: Request) -> Any:
-    instance = PluginManager()._running_plugins.get("LocalSubDownloader")
-    if instance:
-        return await instance.api_save_selected(request)
     return {"code": 1, "message": "插件实例未加载"}
 
 
@@ -162,7 +148,6 @@ class LocalSubDownloader(_PluginBase):
     auth_level = 1
 
     # 内存缓存，用于避免数据库写锁、延迟以及高频读写对前台实时渲染带来的性能与可见性影响
-    _logs_cache = []
     _history_cache = []
     _selected_videos_cache = []
 
@@ -187,13 +172,11 @@ class LocalSubDownloader(_PluginBase):
             name_filter = (config.get("name_filter") or "").strip()
             self.save_data("name_filter", name_filter)
 
-        # 初始化加载持久化日志、历史与选定视频缓存到内存，确保双保险
+        # 初始化加载持久化历史与选定视频缓存到内存，确保双保险
         try:
-            self._logs_cache = self.get_data("logs") or []
             self._history_cache = self.get_data("history") or []
             self._selected_videos_cache = self.get_data("selected_videos") or []
         except Exception:
-            self._logs_cache = []
             self._history_cache = []
             self._selected_videos_cache = []
 
@@ -309,33 +292,15 @@ class LocalSubDownloader(_PluginBase):
     @staticmethod
     def get_command() -> List[Dict[str, Any]]:
         """
-        注册系统远程指令，支持远程或快捷方式一键触发手动整理。
+        注册系统远程指令，此处无须前台展示的全局指令。
         """
-        return [
-            {
-                "cmd": "/localsubdownload",
-                "event": EventType.PluginAction,
-                "desc": "本地字幕下载器：一键手动整理",
-                "category": "插件命令",
-                "data": {
-                    "action": "localsubdownloader_run",
-                },
-            }
-        ]
+        return []
 
     def get_api(self) -> List[Dict[str, Any]]:
         """
         注册后台 API 终结点，处理前台的手动整理请求。
         """
         return [
-            {
-                "path": "/run",
-                "endpoint": global_api_manual_run,
-                "methods": ["POST"],
-                "auth": "bear",
-                "summary": "手动运行整理字幕",
-                "description": "后台异步扫描指定目录路径，为所有视频文件进行字幕爬取",
-            },
             {
                 "path": "/change_root",
                 "endpoint": global_api_change_root,
@@ -367,14 +332,6 @@ class LocalSubDownloader(_PluginBase):
                 "auth": "bear",
                 "summary": "为所选视频下载字幕",
                 "description": "后台异步为前台选中的视频文件下载字幕",
-            },
-            {
-                "path": "/save_selected",
-                "endpoint": global_api_save_selected,
-                "methods": ["POST", "GET"],
-                "auth": "bear",
-                "summary": "保存已勾选视频",
-                "description": "保存前台多选选中的视频路径列表",
             },
             {
                 "path": "/toggle_video",
@@ -594,10 +551,9 @@ class LocalSubDownloader(_PluginBase):
         """
         利用 Vuetify JSON 模式，在前台详情页渲染高颜值“手动整理控制台”、“下载历史记录表格”与“深色滚屏日志”。
         """
-        # 历史和日志始终从 DB 读取，避免多 Worker 进程下内存缓存脏读
+        # 历史数据始终从 DB 读取，避免多 Worker 进程下内存缓存脏读
         history = self.get_data("history") or []
 
-        logs = self.get_data("logs") or []
         # 构造表格记录行
         history_rows = []
         for idx, item in enumerate(history):
@@ -609,9 +565,6 @@ class LocalSubDownloader(_PluginBase):
                 "file": item.get("file", ""),
                 "status": item.get("status", "")
             })
-
-        # 取最近的 50 条日志做滚屏展示
-        logs_display = logs[-50:]
 
         # 手动整理级联选择的核心状态
         root_paths = self.get_moviepilot_media_paths()
@@ -676,179 +629,6 @@ class LocalSubDownloader(_PluginBase):
             else:
                 sub_dirs.sort()
                 video_files.sort(key=lambda x: x.name)
-
-        # 高能提取当前目录下的过滤关键字列表 (Filter Chips)
-        import re
-        filter_chips = set()
-        exclude_words = {
-            '1080p', '2160p', '4k', '720p', 'h264', 'x264', 'h265', 'x265', 'hevc', 'mp4', 'mkv', 
-            'web-dl', 'webdl', 'bluray', 'chs', 'cht', 'eng', 'chs&eng', 'aac', 'dd5.1', 'dts',
-            'sub', 'multi-sub', 'multi', 'uncut', 'rip', 'remux', 'atmos', 'hdr', '10bit', 'sp', 'ova'
-        }
-        
-        def clean_title_name(name: str) -> str:
-            cleaned = re.sub(r'\s*[\(\[\\【\\《\d{4}[\)\]\\】\\》].*', '', name)
-            cleaned = re.sub(r'\s*\(\d{2}-\d{2}\s+\d{2}:\d{2}\).*', '', cleaned)
-            cleaned = cleaned.strip()
-            cleaned = re.split(r'[:：]', cleaned)[0].strip()
-            cleaned = re.split(r'大战', cleaned)[0].strip()
-            cleaned = re.sub(r'\d+$', '', cleaned).strip()
-            cleaned = re.sub(r'\s+[I|V|X|v|x]+$', '', cleaned).strip()
-            cleaned = re.sub(r'(的故事|物语)$', '', cleaned).strip()
-            for conjunction in ('与', '之', '及'):
-                if conjunction in cleaned:
-                    parts = cleaned.split(conjunction)
-                    if len(parts[0].strip()) >= 3:
-                        cleaned = parts[0].strip()
-                        break
-            return cleaned
-
-        # 1) 从子目录名提取
-        for d in all_dir_names:
-            if 2 <= len(d) <= 15:
-                filter_chips.add(d.strip())
-            for p in re.split(r'[\s\.\-\_\,\/\\]+', d):
-                p_clean = p.strip()
-                if len(p_clean) >= 2 and p_clean.lower() not in exclude_words and not p_clean.isdigit():
-                    filter_chips.add(p_clean)
-
-        # 2) 从视频无后缀文件名提取
-        for v in all_video_names:
-            for part in re.findall(r'[\u4e00-\u9fa5]+', v):
-                if len(part) >= 2:
-                    filter_chips.add(part)
-            for part in re.findall(r'[\[\(\【\《(.*?)[\]\)\】\》]', v):
-                part_clean = part.strip()
-                if 2 <= len(part_clean) <= 12 and not part_clean.isdigit() and part_clean.lower() not in exclude_words:
-                    filter_chips.add(part_clean)
-            clean_v = re.sub(r'[\[\(\【\《.*?[\]\)\】\搭载]', ' ', v)
-            for w in re.split(r'[\s\.\-\_\,\/\\]+', clean_v):
-                w_clean = w.strip()
-                if 2 <= len(w_clean) <= 15 and not w_clean.isdigit() and w_clean.lower() not in exclude_words:
-                    filter_chips.add(w_clean)
-
-        all_candidates = set()
-        for c in filter_chips:
-            if c.isdigit() and len(c) == 4:
-                continue
-            if c.lower() in exclude_words:
-                continue
-            c_clean = clean_title_name(c)
-            if c_clean.isdigit() and len(c_clean) == 4:
-                continue
-            if len(c_clean) >= 2:
-                all_candidates.add(c_clean)
-
-        for d in all_dir_names:
-            c_clean = clean_title_name(d)
-            if c_clean.isdigit() and len(c_clean) == 4:
-                continue
-            if len(c_clean) >= 2:
-                all_candidates.add(c_clean)
-                
-        for v in all_video_names:
-            c_clean = clean_title_name(v)
-            if c_clean.isdigit() and len(c_clean) == 4:
-                continue
-            if len(c_clean) >= 2:
-                all_candidates.add(c_clean)
-                
-        if name_filter:
-            c_clean = clean_title_name(name_filter)
-            if c_clean:
-                all_candidates.add(c_clean)
-
-        final_unique_candidates = set()
-        temp_list = sorted(list(all_candidates))
-        mapping = {item: item for item in temp_list}
-        
-        for i in range(len(temp_list) - 1):
-            s1 = temp_list[i]
-            s2 = temp_list[i + 1]
-            common = []
-            for c1, c2 in zip(s1, s2):
-                if c1 == c2:
-                    common.append(c1)
-                else:
-                    break
-            prefix = "".join(common).strip()
-            prefix = re.sub(r'[:：·\-\_\s\d\+]+$', '', prefix).strip()
-            prefix = re.sub(r'\s+[I|V|X|v|x]+$', '', prefix).strip()
-            has_chinese_prefix = any('\u4e00' <= char <= '\u9fa5' for char in prefix)
-            min_len = 2 if has_chinese_prefix else 4
-            if len(prefix) >= min_len:
-                old_val1 = mapping[s1]
-                old_val2 = mapping[s2]
-                for k, v in mapping.items():
-                    if v == old_val1 or v == old_val2:
-                        mapping[k] = prefix
-                        
-        for item in temp_list:
-            final_unique_candidates.add(mapping[item])
-            
-        chips_list = sorted(list(final_unique_candidates))
-        def chip_sort_key(c):
-            try:
-                gbk_bytes = c.encode('gbk', errors='ignore')
-                return (1, 0, gbk_bytes)
-            except Exception:
-                return (2, 0, c.lower().encode('utf-8', errors='ignore'))
-        chips_list.sort(key=chip_sort_key)
-
-        # 1. 完整定义子目录按钮磁贴列表
-        sub_dir_details = []
-        for d in sub_dirs:
-            display_name = f"📁 {d}"
-            if sort_by == "time" and current_dir:
-                try:
-                    mtime = (Path(current_dir) / d).stat().st_mtime
-                    dt_str = datetime.datetime.fromtimestamp(mtime).strftime("%m-%d %H:%M")
-                    display_name = f"📁 {d} ({dt_str})"
-                except Exception:
-                    pass
-            sub_dir_details.append((d, display_name))
-
-        dir_buttons = []
-        for d, display_name in sub_dir_details:
-            dir_buttons.append({
-                'component': 'VCol',
-                'props': {'cols': 6, 'md': 3, 'lg': 2},
-                'content': [
-                    {
-                        'component': 'VBtn',
-                        'text': display_name,
-                        'props': {
-                            'variant': 'outlined',
-                            'block': True,
-                            'color': 'primary',
-                            'class': 'text-none text-truncate justify-start sub-dir-filter-btn',
-                            'density': 'comfortable'
-                        },
-                        'events': {
-                            'click': {
-                                'api': 'plugin/LocalSubDownloader/go_into',
-                                'method': 'post',
-                                'params': {'dir_name': d}
-                            }
-                        }
-                    }
-                ]
-            })
-        
-        if not dir_buttons:
-            dir_buttons.append({
-                'component': 'VCol',
-                'props': {'cols': 12},
-                'content': [
-                    {
-                        'component': 'VListItem',
-                        'props': {
-                            'title': '（当前目录下无子文件夹）',
-                            'class': 'text-grey text-center py-2'
-                        }
-                    }
-                ]
-            })
 
         # 2. 构造直接显示的视频列表组件
         selected_videos = self.get_data("selected_videos") or []
@@ -927,59 +707,6 @@ class LocalSubDownloader(_PluginBase):
                         }
                     ]
                 })
-
-        # 根目录下拉组件数据源
-        root_items = [{"title": f"📂 {p}", "value": str(p)} for p in root_paths]
-
-        # 构造子目录导航下拉组件 (VAutocomplete，支持入力过滤)
-        dir_items = [{"title": f"📁 {d}", "value": d} for d in sub_dirs]
-        dir_navigation = []
-        if sub_dirs:
-            dir_navigation.append({
-                'component': 'VRow',
-                'props': {'class': 'mb-2', 'dense': True},
-                'content': [
-                    {
-                        'component': 'VCol',
-                        'props': {'cols': 12},
-                        'content': [
-                            {
-                                'component': 'VAutocomplete',
-                                'props': {
-                                    'model': 'sub_dir',
-                                    'label': f'🔍 输入名称/拼音以过滤当前目录下 {len(sub_dirs)} 个子文件夹 (选中即可导航进入)',
-                                    'items': dir_items,
-                                    'variant': 'outlined',
-                                    'density': 'comfortable',
-                                    'clearable': True,
-                                    'prepend-inner-icon': 'mdi-folder-search',
-                                    'hide-details': True
-                                },
-                                'events': {
-                                    'change': {
-                                        'api': 'plugin/LocalSubDownloader/go_into',
-                                        'method': 'post',
-                                        'params': {'dir_name': '{{sub_dir}}'}
-                                    },
-                                    'update:modelValue': {
-                                        'api': 'plugin/LocalSubDownloader/go_into',
-                                        'method': 'post',
-                                        'params': {'dir_name': '{{sub_dir}}'}
-                                    }
-                                }
-                            }
-                        ]
-                    }
-                ]
-            })
-        else:
-            dir_navigation.append({
-                'component': 'VListItem',
-                'props': {
-                    'title': '（当前目录下无子文件夹）',
-                    'class': 'text-grey'
-                }
-            })
 
         # 构造视频选择及执行部分
         video_action_component = []
@@ -1407,24 +1134,9 @@ class LocalSubDownloader(_PluginBase):
 
     def add_log(self, msg: str):
         """
-        向控制台输出日志，并记录进插件的实时日志列表中（保留最新 150 条），支持前台渲染展示。
+        向控制台输出标准系统日志。
         """
-        time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        log_line = f"[{time_str}] {msg}"
         logger.info(f"[LocalSubDownloader] {msg}")
-
-        try:
-            # 双保险：同步操作内存缓存和持久化
-            if not hasattr(self, "_logs_cache") or self._logs_cache is None:
-                self._logs_cache = self.get_data("logs") or []
-            
-            self._logs_cache.append(log_line)
-            if len(self._logs_cache) > 150:
-                self._logs_cache = self._logs_cache[-150:]
-            
-            self.save_data("logs", self._logs_cache)
-        except Exception as e:
-            logger.error(f"[LocalSubDownloader] 追加日志失败: {e}")
 
     def add_history(self, video: str, source: str, file: str, status: str):
         """
@@ -1530,28 +1242,7 @@ class LocalSubDownloader(_PluginBase):
 
     # ================= 手动整理/API/远程命令接口处理 =================
 
-    @eventmanager.register(EventType.PluginAction)
-    def run_command(self, event: Event):
-        """
-        监听一键手动整理动作（Event）触发
-        """
-        event_data = event.event_data or {}
-        if event_data.get("action") != "localsubdownloader_run":
-            return
-        path_str = event_data.get("path")
-        self.manual_run(path_str)
 
-    async def api_manual_run(self, request: Request) -> Any:
-        """
-        前台 POST 请求调用的端点
-        """
-        try:
-            body = await get_request_params(request)
-            path_str = body.get("path")
-            self.manual_run(path_str)
-            return {"code": 0, "message": "手动整理任务已在后台启动，请查看下方实时运行日志"}
-        except Exception as e:
-            return {"code": 1, "message": f"启动整理失败: {e}"}
 
     async def api_change_root(self, request: Request) -> Any:
         """
@@ -1656,38 +1347,7 @@ class LocalSubDownloader(_PluginBase):
         except Exception as e:
             return {"code": 1, "message": f"进入子目录失败: {e}"}
 
-    async def api_save_selected(self, request: Request) -> Any:
-        """
-        前台 POST 请求调用的端点：实时批量保存勾选的视频路径列表
-        """
-        try:
-            body = await get_request_params(request)
-            logger.info(f"[LocalSubDownloader] api_save_selected 接收到 Body 原始数据: {body}")
-            selected = body.get("selected")
-            if not selected or "{{selected_videos}}" in str(selected):
-                selected = body.get("value") or body.get("videos")
-            
-            selected_list = []
-            if isinstance(selected, list):
-                selected_list = selected
-            elif isinstance(selected, str):
-                if selected.startswith("[") and selected.endswith("]"):
-                    try:
-                        selected_list = json.loads(selected)
-                    except Exception:
-                        selected_list = [normalize_path(v.strip()) for v in selected.split(",") if v.strip()]
-                else:
-                    selected_list = [normalize_path(v.strip()) for v in selected.split(",") if v.strip()]
-            else:
-                selected_list = []
 
-            # 统一做 normalize_path 规整化
-            self._selected_videos_cache = [normalize_path(p) for p in selected_list if p]
-            self.save_data("selected_videos", self._selected_videos_cache)
-            logger.info(f"[LocalSubDownloader] 联动保存视频多选缓存: 已选择 {len(self._selected_videos_cache)} 个视频")
-            return {"code": 0}
-        except Exception as e:
-            return {"code": 1, "message": f"同步多选状态失败: {e}"}
 
     async def api_toggle_video(self, request: Request) -> Any:
         """
@@ -1880,13 +1540,7 @@ class LocalSubDownloader(_PluginBase):
         self.add_log(f"🎉 选定视频字幕下载完毕！成功匹配并更新了 {success_count}/{total} 个视频的字幕")
         self.add_log("========================================")
 
-    def manual_run(self, path_str: str = None):
-        """
-        开启后台线程进行目录扫描，规避网页超时挂起
-        """
-        thread = threading.Thread(target=self._scan_and_process, args=(path_str,))
-        thread.daemon = True
-        thread.start()
+
 
     def get_moviepilot_media_paths(self) -> List[Path]:
         """
@@ -2081,83 +1735,7 @@ class LocalSubDownloader(_PluginBase):
 
         return valid_paths
 
-    def _scan_and_process(self, path_str: str = None):
-        self.add_log("========================================")
-        self.add_log("▶️ 开始进行手动字幕整理...")
-        self.add_log("========================================")
 
-        scan_paths = []
-        if path_str and path_str.strip():
-            target_path = Path(path_str.strip())
-            if target_path.exists():
-                scan_paths.append(target_path)
-                self.add_log(f"📌 已指定扫描整理目录路径: {target_path}")
-            else:
-                self.add_log(f"❌ 指定的目录路径不存在，无法扫描: {target_path}")
-                self.add_log("⏹️ 手动扫描已中断")
-                return
-        else:
-            self.add_log("🔍 未指定扫描路径，正在自动获取 MoviePilot 媒体库与分类整理目录配置...")
-            scan_paths = self.get_moviepilot_media_paths()
-            
-            if scan_paths:
-                self.add_log(f"🎯 成功识别并载入了以下 {len(scan_paths)} 个整理目录:")
-                for p in scan_paths:
-                    self.add_log(f" 📂 {p}")
-            else:
-                self.add_log("⚠️ 未能从系统数据库或配置中定位到任何有效的媒体分类整理目录")
-
-        if not scan_paths:
-            self.add_log("❌ 没有定位到任何有效的媒体扫描目录。请确认您已在 MoviePilot 目录配置中设置了分类目录，或者在上方输入正确的绝对路径。")
-            self.add_log("⏹️ 手动扫描已中断")
-            return
-
-        video_extensions = {'.mp4', '.mkv', '.avi', '.ts', '.wmv', '.mov', '.flv', '.rmvb'}
-        
-        # 批量汇总检索到的视频文件
-        video_files = []
-        for path in scan_paths:
-            self.add_log(f"🔍 正在递归检索目录下的所有视频文件: {path}")
-            try:
-                for item in path.rglob("*"):
-                    if item.is_file() and item.suffix.lower() in video_extensions:
-                        video_files.append(item)
-            except Exception as e:
-                self.add_log(f"⚠️ 检索目录 {path} 失败: {e}")
-
-        # 去重合并
-        video_files = list(set(video_files))
-        total = len(video_files)
-        self.add_log(f"📊 扫描完成！共定位到 {total} 个视频文件")
-
-        success_count = 0
-        for idx, video_path in enumerate(video_files):
-            try:
-                self.add_log(f"⏳ [{idx + 1}/{total}] 正在处理视频: {video_path.name}")
-                if self.process_video(video_path):
-                    success_count += 1
-            except Exception as e:
-                self.add_log(f"❌ 匹配 {video_path.name} 字幕发生错误: {e}")
-
-        self.add_log("========================================")
-        self.add_log(f"🎉 手动整理完毕！成功匹配并更新了 {success_count}/{total} 个视频的字幕")
-        self.add_log("========================================")
-
-        total = len(video_files)
-        self.add_log(f"📊 扫描完成！共定位到 {total} 个视频文件")
-
-        success_count = 0
-        for idx, video_path in enumerate(video_files):
-            try:
-                self.add_log(f"⏳ [{idx + 1}/{total}] 正在处理视频: {video_path.name}")
-                if self.process_video(video_path):
-                    success_count += 1
-            except Exception as e:
-                self.add_log(f"❌ 匹配 {video_path.name} 字幕发生错误: {e}")
-
-        self.add_log("========================================")
-        self.add_log(f"🎉 手动整理完毕！成功处理了 {success_count}/{total} 个文件")
-        self.add_log("========================================")
 
     # ================= 视频字幕匹配主干 =================
 
