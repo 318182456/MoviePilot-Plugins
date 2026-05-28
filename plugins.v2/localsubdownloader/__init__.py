@@ -1193,7 +1193,8 @@ class LocalSubDownloader(_PluginBase):
                         continue
 
                     # 1. 检查本地是否已经有中文字幕
-                    has_chinese_sub = False
+                    has_chinese_sub_out = False
+                    has_chinese_sub_in = False
                     chinese_keywords = ["zh", "cn", "chi", "chs", "cht", "双语", "中文", "简", "繁", "国语"]
                     
                     # 搜索同名外部字幕
@@ -1201,21 +1202,22 @@ class LocalSubDownloader(_PluginBase):
                         if sub_file.suffix.lower() in {'.srt', '.ass', '.vtt'}:
                             sub_name = sub_file.name.lower()
                             if any(kw in sub_name for kw in chinese_keywords):
-                                has_chinese_sub = True
+                                has_chinese_sub_out = True
                                 break
                                 
                     # 检查内置/内挂字幕是否包含中文
-                    if not has_chinese_sub:
+                    if not has_chinese_sub_out:
                         embedded_subs = self.get_video_embedded_subs(file_path)
                         for emb in embedded_subs:
                             emb_lower = emb.lower()
                             if any(kw in emb_lower for kw in chinese_keywords):
-                                has_chinese_sub = True
+                                has_chinese_sub_in = True
                                 break
                     
                     # 2. 如果已有中文字幕，跳过并提示
-                    if has_chinese_sub:
-                        self.add_log(f"📥 [自动跳过] 整理入库延时结束，检测到本地已存在中文字幕（包含内置），无需重复拉取: {file_path.name}")
+                    if has_chinese_sub_out or has_chinese_sub_in:
+                        sub_note = "（外挂+内置）" if has_chinese_sub_out and has_chinese_sub_in else "（外挂）" if has_chinese_sub_out else "（内置）"
+                        self.add_log(f"📥 [自动跳过] 整理入库延时结束，检测到本地已存在中文字幕{sub_note}，无需重复拉取: {file_path.name}")
                         continue
                     
                     # 3. 否则，开始拉取字幕
